@@ -2,6 +2,8 @@
 
 A smart healthcare queue management and real-time waiting-time system for doctors, clinics, hospitals and laboratories.
 
+**Live demo:** https://qfree-two.vercel.app. The API runs on Render's free plan and sleeps when idle, so the first visit after a quiet period can take up to a minute.
+
 Patients see a provider's live queue, join from their phone, get a digital token (for example `QF-031`), and watch their position and estimated wait update by themselves. They are nudged when their turn is near. Doctors call the next patient with one tap. Clinics and labs run many queues from one dashboard. Administrators oversee the whole platform.
 
 ```
@@ -63,9 +65,9 @@ Open http://localhost:5173. To use your own PostgreSQL instead, point `DATABASE_
 | Clinic admin | `clinic@qfree.dev` | Live dashboard of every queue, doctors, services, staff, hours, reports, analytics |
 | Receptionist | `reception@qfree.dev` | Runs Sharma Family Clinic's queues |
 | Lab admin | `lab@qfree.dev` | Blood collection and X-ray queues |
-| Administrator | `admin@qfree.dev` | Users, verification, audit log, issues, settings |
+| Administrator | `admin@qfree.dev` | Users, verification, audit log, issues, settings. On the live site this account uses the secret `DEMO_ADMIN_PASSWORD` from Render, not `Password123`. |
 
-The seed produces today's live sessions plus 30 days of simulated history (about 4,800 tokens) for analytics. Re-run `npm run seed` at any time to reset.
+The seed produces today's live sessions plus 30 days of simulated history (about 4,800 tokens) for analytics. To wipe the local database and reload the demo, run `npm run seed:reset`. Plain `npm run seed` refuses to touch a database that already has users.
 
 ## Tests
 
@@ -114,19 +116,36 @@ docs/DESIGN.md
 | `TRUST_PROXY` | `1` | Hops of reverse proxy (for correct client IPs in rate limits and audit) |
 | `LOG_LEVEL` | `info` | |
 
-`web/.env`: `VITE_API_URL`. Leave it empty in development; set it to the API origin in production.
+Web build settings:
+- `VITE_API_URL`: leave empty, so REST calls go to `/api` on the same origin.
+- `VITE_SOCKET_URL`: the API origin for WebSockets (see `web/.env.production`).
 
 ## Deployment
 
-**Database:** any managed PostgreSQL (Neon, Supabase, RDS, Render).
+The live setup is **web on Vercel**, **API + PostgreSQL on Render**:
 
-**API (Render / Railway / AWS):**
-- Root directory `server`; build `npm install && npm run build`; start `npx prisma migrate deploy && npm start`.
-- Set `NODE_ENV=production`, the secrets, `DATABASE_URL`, and `CORS_ORIGINS=https://your-web-domain`.
-- WebSockets must be enabled on the platform (they are by default on Render and Railway).
-- Production cookies are `Secure; SameSite=None`, so the API must be served over HTTPS.
+```
+browser ──▶ qfree-two.vercel.app ──/api/* proxy──▶ qfree-api.onrender.com ──▶ PostgreSQL (Render)
+   └───────────── WebSocket (Socket.IO) ────────────▶ qfree-api.onrender.com
+```
 
-**Web (Vercel):** root directory `web`, framework Vite, env `VITE_API_URL=https://your-api-domain`. `web/vercel.json` rewrites all routes to the SPA.
+REST calls go through Vercel's `/api` proxy ([web/vercel.json](web/vercel.json)), which makes the refresh cookie first-party. Otherwise Safari/iOS would block it as a third-party cookie. Vercel can't proxy WebSockets, so the socket connects to Render directly. It authenticates with the access token, not cookies.
+
+**API + database (Render):** [render.yaml](render.yaml) is a Blueprint.
+- **Setup:** in the Render dashboard choose New → Blueprint → this repo, and enter `CORS_ORIGINS` (the web origin). Render generates the JWT secrets and the demo admin password.
+- **On each start:** it runs `prisma migrate deploy`, then loads demo data if `SEED_DEMO=true` and the database is empty, then starts the server.
+- **Redeploys:** pushes to `main` redeploy automatically.
+- **Free-plan limits:** the service sleeps after 15 idle minutes, and the free database expires after 30 days. Point `DATABASE_URL` at e.g. Neon to keep data.
+
+**Web (Vercel):** the project root is `web`. Deploy with:
+
+```bash
+cd web
+npx vercel@latest build --prod
+npx vercel@latest deploy --prebuilt --prod
+```
+
+If the API moves, update the `/api` rewrite in `web/vercel.json` and `VITE_SOCKET_URL` in `web/.env.production`.
 
 **Scaling:** the API is stateless (queue locks live in PostgreSQL). For multiple instances, add the Socket.IO Redis adapter (see DESIGN §8).
 

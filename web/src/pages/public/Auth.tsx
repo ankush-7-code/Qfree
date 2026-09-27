@@ -10,7 +10,6 @@ const DEMO = [
   { label: 'Patient', email: 'patient@qfree.dev' },
   { label: 'Doctor', email: 'dr.sharma@qfree.dev' },
   { label: 'Clinic', email: 'clinic@qfree.dev' },
-  { label: 'Admin', email: 'admin@qfree.dev' },
 ];
 
 /** Only allow in-app redirects after login (prevents open redirects). */

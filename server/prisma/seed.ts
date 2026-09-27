@@ -40,21 +40,34 @@ async function wipe() {
 }
 
 async function main() {
+  // --auto (used at server start): seed only when SEED_DEMO=true and the database is still empty.
+  const auto = process.argv.includes('--auto');
+  if (auto && process.env.SEED_DEMO !== 'true') return;
+
   // The seed wipes every table: refuse on a database that already has users unless explicitly asked.
   const existing = await prisma.user.count();
-  if (existing > 0 && !process.argv.includes('--reset')) {
-    console.error(`Database already has ${existing} users. Re-run with --reset to wipe it and load demo data.`);
-    process.exitCode = 1;
-    return;
+  if (existing > 0) {
+    if (auto) {
+      console.log('Demo seed skipped: database already has data.');
+      return;
+    }
+    if (!process.argv.includes('--reset')) {
+      console.error(`Database already has ${existing} users. Re-run with --reset to wipe it and load demo data.`);
+      process.exitCode = 1;
+      return;
+    }
   }
   console.log('Seeding QFree demo data…');
   await wipe();
   const passwordHash = await bcrypt.hash(PASSWORD, 10);
+  // On a public deployment the admin must not share the published demo password.
+  const adminPassword = process.env.DEMO_ADMIN_PASSWORD;
+  const adminHash = adminPassword ? await bcrypt.hash(adminPassword, 12) : passwordHash;
   const now = new Date();
   const today = localDate(TZ, now);
 
   // ── Users ──
-  const admin = await prisma.user.create({ data: { email: 'admin@qfree.dev', fullName: 'QFree Administrator', role: 'ADMIN', passwordHash } });
+  const admin = await prisma.user.create({ data: { email: 'admin@qfree.dev', fullName: 'QFree Administrator', role: 'ADMIN', passwordHash: adminHash } });
   const clinicAdmin = await prisma.user.create({ data: { email: 'clinic@qfree.dev', fullName: 'Rekha Sharma', phone: '+91 98200 11111', role: 'ORG_ADMIN', passwordHash } });
   const labAdmin = await prisma.user.create({ data: { email: 'lab@qfree.dev', fullName: 'Suresh Kulkarni', phone: '+91 98200 22222', role: 'ORG_ADMIN', passwordHash } });
   const receptionist = await prisma.user.create({ data: { email: 'reception@qfree.dev', fullName: 'Anita Desai', role: 'ORG_ADMIN', passwordHash } });
@@ -277,7 +290,7 @@ async function main() {
   await prisma.auditLog.create({ data: { actorId: admin.id, action: 'system.seed', entityType: 'system', meta: { entries: history.length + todays.length } } });
 
   console.log(`Seeded ${history.length + todays.length} queue entries across ${queueSpecs.length} queues.`);
-  console.log(`Demo password for every account: ${PASSWORD}`);
+  console.log(`Demo password: ${PASSWORD}${adminPassword ? ' (admin uses DEMO_ADMIN_PASSWORD)' : ' for every account'}`);
   console.log('  admin@qfree.dev · clinic@qfree.dev · lab@qfree.dev · reception@qfree.dev');
   console.log('  dr.sharma@qfree.dev · dr.iyer@qfree.dev · dr.khan@qfree.dev · patient@qfree.dev');
 }

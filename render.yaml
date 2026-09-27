@@ -30,6 +30,14 @@ services:
         value: "2"
       - key: LOG_LEVEL
         value: info
+      # Load demo data on start, only while the database is empty (never overwrites real data).
+      # Set to "false" for a clean production launch.
+      - key: SEED_DEMO
+        value: "true"
+      # Password for the demo admin@qfree.dev account (the other demo logins use Password123).
+      # Render generates it; see qfree-api → Environment in the dashboard.
+      - key: DEMO_ADMIN_PASSWORD
+        generateValue: true
 
 databases:
   - name: qfree-db
