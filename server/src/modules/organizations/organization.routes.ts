@@ -12,6 +12,15 @@ import { getSnapshot } from '../queues/queue.state.js';
 
 export const organizationRouter = Router();
 
+/** "jammu" → "Jammu", "new  delhi" → "New Delhi" (matches PostgreSQL initcap used in the data migration). */
+export function cityName(raw: string) {
+  return raw
+    .trim()
+    .replace(/\s+/g, ' ')
+    .toLowerCase()
+    .replace(/(^|[^a-z])([a-z])/g, (_m, sep: string, ch: string) => sep + ch.toUpperCase());
+}
+
 const orgType = z.enum(['CLINIC', 'LABORATORY', 'HOSPITAL', 'DIAGNOSTIC_CENTER']);
 
 const orgBody = z.object({
@@ -19,7 +28,7 @@ const orgBody = z.object({
   type: orgType,
   description: z.string().trim().max(1000).optional(),
   address: z.string().trim().min(3).max(300),
-  city: z.string().trim().min(2).max(80),
+  city: z.string().trim().min(2).max(80).transform(cityName),
   phone: z.string().trim().regex(/^\+?[0-9 ()-]{7,20}$/).optional(),
   email: z.string().trim().toLowerCase().email().optional(),
   timezone: z.string().refine(isValidTimeZone, 'Unknown timezone').default('Asia/Kolkata'),
@@ -80,7 +89,8 @@ organizationRouter.get('/', async (req, res) => {
 
 organizationRouter.get('/cities', async (_req, res) => {
   const rows = await prisma.organization.findMany({ where: { isActive: true }, distinct: ['city'], select: { city: true }, orderBy: { city: 'asc' } });
-  res.json(rows.map((r) => r.city));
+  // One entry per city regardless of how it was typed.
+  res.json([...new Set(rows.map((r) => cityName(r.city)))].sort());
 });
 
 organizationRouter.get('/:id', async (req, res) => {

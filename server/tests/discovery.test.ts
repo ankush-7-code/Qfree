@@ -26,6 +26,21 @@ describe('doctor discovery', () => {
     expect(await api().get('/api/organizations/cities').then((r) => r.body)).toContain('Srinagar');
   });
 
+  it('stores one spelling per city, however it was typed', async () => {
+    const doc = await register('DOCTOR', { fullName: 'Dr. Lowercase City' });
+    const org = await api()
+      .post('/api/organizations')
+      .set(doc.auth)
+      .send({ name: 'Tawi Clinic', type: 'CLINIC', address: 'Gandhi Nagar', city: '  jammu ' })
+      .expect(201);
+    expect(org.body.city).toBe('Jammu');
+    const other = await register('DOCTOR', { fullName: 'Dr. Upper City' });
+    await api().post('/api/organizations').set(other.auth).send({ name: 'Capital Clinic', type: 'CLINIC', address: 'Connaught Place', city: 'NEW  DELHI' }).expect(201);
+    const cities = (await api().get('/api/organizations/cities')).body as string[];
+    expect(cities.filter((c) => c.toLowerCase() === 'jammu')).toEqual(['Jammu']);
+    expect(cities).toContain('New Delhi');
+  });
+
   it('hides doctors of suspended organizations', async () => {
     const doc = await register('DOCTOR', { fullName: 'Dr. Suspended Clinic' });
     const org = await api()
