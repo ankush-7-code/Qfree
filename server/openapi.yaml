@@ -1,0 +1,468 @@
+openapi: 3.1.0
+info:
+  title: QFree API
+  version: 1.0.0
+  description: |
+    Smart healthcare queue management and real-time waiting-time information.
+
+    **Auth:** send `Authorization: Bearer <accessToken>` (15 min). Renew with `POST /auth/refresh`,
+    which reads the httpOnly `qf_rt` cookie and rotates it.
+
+    **Errors:** `{ "error": { "code": "QUEUE_FULL", "message": "…", "details": … } }`.
+
+    **Real-time:** Socket.IO on the same origin. Handshake `auth: { token }` (optional).
+    Client → server: `queue:watch`, `queue:unwatch`, `queue:watch-staff`, `queue:unwatch-staff`, `org:watch` (arg: id, ack `{ok, error?}`).
+    Server → client: `queue:snapshot` (QueueSnapshot), `queue:entry` (EntryView), `queue:staff` (StaffView), `org:queue`, `notification:new`.
+servers:
+  - url: /api
+tags:
+  - name: Auth
+  - name: Discovery
+  - name: Queues
+  - name: Queue operations
+  - name: Patients
+  - name: Doctors
+  - name: Organizations
+  - name: Notifications
+  - name: Analytics
+  - name: Issues
+  - name: Admin
+
+components:
+  securitySchemes:
+    bearer: { type: http, scheme: bearer, bearerFormat: JWT }
+    refreshCookie: { type: apiKey, in: cookie, name: qf_rt }
+  parameters:
+    id: { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+    entryId: { name: entryId, in: path, required: true, schema: { type: string, format: uuid } }
+    page: { name: page, in: query, schema: { type: integer, minimum: 1, default: 1 } }
+    pageSize: { name: pageSize, in: query, schema: { type: integer, minimum: 1, maximum: 100, default: 20 } }
+    q: { name: q, in: query, schema: { type: string, maxLength: 100 } }
+    from: { name: from, in: query, schema: { type: string, format: date }, description: Default 29 days ago }
+    to: { name: to, in: query, schema: { type: string, format: date }, description: Default today }
+    bucket: { name: bucket, in: query, schema: { type: string, enum: [day, week, month], default: day } }
+  responses:
+    Error:
+      description: Error
+      content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } }
+    NoContent: { description: No content }
+  schemas:
+    Error:
+      type: object
+      properties:
+        error:
+          type: object
+          required: [code, message]
+          properties:
+            code: { type: string, examples: [VALIDATION_ERROR, UNAUTHORIZED, FORBIDDEN, NOT_FOUND, QUEUE_FULL, QUEUE_CLOSED, QUEUE_PAUSED, ALREADY_IN_QUEUE, OUTSIDE_HOURS, DOCTOR_UNAVAILABLE, TOO_MANY_ACTIVE_QUEUES, RATE_LIMITED] }
+            message: { type: string }
+            details: {}
+    Paged:
+      type: object
+      properties:
+        items: { type: array, items: {} }
+        total: { type: integer }
+        page: { type: integer }
+        pageSize: { type: integer }
+        totalPages: { type: integer }
+    Role: { type: string, enum: [PATIENT, DOCTOR, ORG_ADMIN, ADMIN] }
+    Me:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        email: { type: string }
+        fullName: { type: string }
+        phone: { type: [string, 'null'] }
+        role: { $ref: '#/components/schemas/Role' }
+        patient: { type: [object, 'null'] }
+        doctor: { type: [object, 'null'] }
+        organizations: { type: array, items: { type: object } }
+    Session:
+      type: object
+      properties:
+        user: { $ref: '#/components/schemas/Me' }
+        accessToken: { type: string }
+    QueueSnapshot:
+      type: object
+      description: Public, anonymous-safe queue state (no patient identities).
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        tokenPrefix: { type: string, example: QF }
+        status: { type: string, enum: [OPEN, PAUSED, CLOSED] }
+        organization: { type: object }
+        doctor: { type: [object, 'null'] }
+        service: { type: [object, 'null'] }
+        sessionDate: { type: [string, 'null'], example: '2026-09-27' }
+        currentToken: { type: [string, 'null'], example: QF-024 }
+        waitingCount: { type: integer, example: 6 }
+        servedCount: { type: integer }
+        capacity: { type: integer }
+        remainingCapacity: { type: integer }
+        avgServiceMinutes: { type: number }
+        estimatedWaitMinutes: { type: integer, description: Wait for someone joining now }
+        isAcceptingPatients: { type: boolean }
+        updatedAt: { type: string, format: date-time }
+    EntryView:
+      type: object
+      description: The caller's own position in a queue.
+      properties:
+        queueId: { type: string, format: uuid }
+        entry:
+          type: object
+          properties:
+            id: { type: string, format: uuid }
+            tokenLabel: { type: string, example: QF-031 }
+            status: { type: string, enum: [WAITING, SERVING, COMPLETED, SKIPPED, CANCELLED, NO_SHOW] }
+            priority: { type: string, enum: [NORMAL, PRIORITY, EMERGENCY] }
+            joinedAt: { type: string, format: date-time }
+        currentToken: { type: [string, 'null'], example: QF-024 }
+        patientsAhead: { type: integer, example: 6 }
+        estimatedWaitMinutes: { type: integer, example: 35 }
+        expectedAt: { type: [string, 'null'], format: date-time }
+        phase: { type: string, enum: [YOUR_TURN, NEXT, APPROACHING, WAITING, DONE, SKIPPED, CANCELLED, CLOSED] }
+        progress: { type: number, minimum: 0, maximum: 1 }
+    StaffView:
+      type: object
+      properties:
+        snapshot: { $ref: '#/components/schemas/QueueSnapshot' }
+        serving: { type: [object, 'null'] }
+        waiting: { type: array, items: { type: object } }
+        skipped: { type: array, items: { type: object } }
+        finished: { type: array, items: { type: object } }
+        stats: { type: object }
+    QueueInput:
+      type: object
+      required: [organizationId, name]
+      properties:
+        organizationId: { type: string, format: uuid }
+        doctorId: { type: [string, 'null'], format: uuid }
+        serviceId: { type: [string, 'null'], format: uuid }
+        name: { type: string }
+        tokenPrefix: { type: string, pattern: '^[A-Z]{1,4}$', default: QF }
+        capacity: { type: integer, minimum: 1, maximum: 5000, default: 100 }
+        avgServiceMinutes: { type: number, minimum: 1, maximum: 60, default: 10 }
+        approachingThreshold: { type: integer, minimum: 1, maximum: 20, default: 3 }
+    Analytics:
+      type: object
+      properties:
+        summary: { type: object, description: 'total, served, cancelled, noShow, skipped, avgWaitMinutes, p90WaitMinutes, avgConsultMinutes, completionRate, utilizationPercent' }
+        volume: { type: array, items: { type: object } }
+        peakHours: { type: array, items: { type: object, properties: { hour: { type: integer }, joins: { type: integer } } } }
+        weekdays: { type: array, items: { type: object } }
+        perQueue: { type: array, items: { type: object } }
+    Hours:
+      type: object
+      properties:
+        dayOfWeek: { type: integer, minimum: 0, maximum: 6 }
+        openTime: { type: string, example: '09:00' }
+        closeTime: { type: string, example: '18:00' }
+        isClosed: { type: boolean }
+
+security:
+  - bearer: []
+
+paths:
+  /health:
+    get: { tags: [Discovery], security: [], summary: Liveness + DB check, responses: { '200': { description: OK } } }
+
+  # ───────── Auth ─────────
+  /auth/register:
+    post:
+      tags: [Auth]
+      security: []
+      summary: Create a patient, doctor or clinic/lab account
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, password, fullName]
+              properties:
+                email: { type: string, format: email }
+                password: { type: string, minLength: 8, description: Must contain a letter and a number }
+                fullName: { type: string }
+                phone: { type: string }
+                role: { type: string, enum: [PATIENT, DOCTOR, ORG_ADMIN], default: PATIENT }
+                doctor: { type: object, description: Required when role is DOCTOR, properties: { specialization: { type: string }, qualification: { type: string }, experienceYears: { type: integer } } }
+      responses:
+        '201': { description: Created (sets qf_rt cookie), content: { application/json: { schema: { $ref: '#/components/schemas/Session' } } } }
+        '400': { $ref: '#/components/responses/Error' }
+        '409': { $ref: '#/components/responses/Error' }
+  /auth/login:
+    post:
+      tags: [Auth]
+      security: []
+      requestBody: { required: true, content: { application/json: { schema: { type: object, required: [email, password], properties: { email: { type: string }, password: { type: string } } } } } }
+      responses:
+        '200': { description: OK (sets qf_rt cookie), content: { application/json: { schema: { $ref: '#/components/schemas/Session' } } } }
+        '401': { $ref: '#/components/responses/Error' }
+        '429': { $ref: '#/components/responses/Error' }
+  /auth/refresh:
+    post:
+      tags: [Auth]
+      security: [{ refreshCookie: [] }]
+      summary: Rotate the refresh cookie and get a new access token
+      description: A token replayed within 60 s returns `REFRESH_RACE` (retry); later replays revoke every session of the user.
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/Session' } } } }
+        '401': { $ref: '#/components/responses/Error' }
+  /auth/logout:
+    post: { tags: [Auth], security: [{ refreshCookie: [] }], responses: { '204': { $ref: '#/components/responses/NoContent' } } }
+  /auth/me:
+    get: { tags: [Auth], responses: { '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/Me' } } } }, '401': { $ref: '#/components/responses/Error' } } }
+  /auth/change-password:
+    post:
+      tags: [Auth]
+      summary: Change password and revoke all sessions
+      requestBody: { required: true, content: { application/json: { schema: { type: object, required: [currentPassword, newPassword], properties: { currentPassword: { type: string }, newPassword: { type: string } } } } } }
+      responses: { '204': { $ref: '#/components/responses/NoContent' }, '401': { $ref: '#/components/responses/Error' } }
+
+  # ───────── Discovery ─────────
+  /doctors:
+    get:
+      tags: [Discovery]
+      security: []
+      parameters:
+        - $ref: '#/components/parameters/q'
+        - { name: specialization, in: query, schema: { type: string } }
+        - { name: city, in: query, schema: { type: string } }
+        - { name: organizationId, in: query, schema: { type: string, format: uuid } }
+        - $ref: '#/components/parameters/page'
+        - $ref: '#/components/parameters/pageSize'
+      responses: { '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/Paged' } } } } }
+  /doctors/specializations:
+    get: { tags: [Discovery], security: [], responses: { '200': { description: List of strings } } }
+  /doctors/{id}:
+    get: { tags: [Discovery], security: [], parameters: [{ $ref: '#/components/parameters/id' }], responses: { '200': { description: Doctor profile, schedules and live queue snapshots }, '404': { $ref: '#/components/responses/Error' } } }
+  /organizations:
+    get:
+      tags: [Discovery]
+      security: []
+      parameters:
+        - $ref: '#/components/parameters/q'
+        - { name: type, in: query, schema: { type: string, enum: [CLINIC, LABORATORY, HOSPITAL, DIAGNOSTIC_CENTER] } }
+        - { name: city, in: query, schema: { type: string } }
+        - $ref: '#/components/parameters/page'
+        - $ref: '#/components/parameters/pageSize'
+      responses: { '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/Paged' } } } } }
+    post:
+      tags: [Organizations]
+      summary: Create an organization (ORG_ADMIN, or DOCTOR for their own practice); caller becomes OWNER
+      requestBody: { required: true, content: { application/json: { schema: { type: object, required: [name, type, address, city], properties: { name: { type: string }, type: { type: string }, address: { type: string }, city: { type: string }, timezone: { type: string, default: Asia/Kolkata }, hours: { type: array, items: { $ref: '#/components/schemas/Hours' } } } } } } }
+      responses: { '201': { description: Created }, '403': { $ref: '#/components/responses/Error' } }
+  /clinics:
+    get: { tags: [Discovery], security: [], summary: Alias of /organizations?type=CLINIC, responses: { '200': { description: OK } } }
+  /clinics/{id}:
+    get: { tags: [Discovery], security: [], parameters: [{ $ref: '#/components/parameters/id' }], responses: { '200': { description: OK } } }
+  /laboratories:
+    get: { tags: [Discovery], security: [], summary: Alias of /organizations?type=LABORATORY, responses: { '200': { description: OK } } }
+  /organizations/cities:
+    get: { tags: [Discovery], security: [], responses: { '200': { description: List of cities } } }
+  /organizations/{id}:
+    get: { tags: [Discovery], security: [], parameters: [{ $ref: '#/components/parameters/id' }], responses: { '200': { description: Profile, hours, doctors, services, live queues }, '404': { $ref: '#/components/responses/Error' } } }
+    patch: { tags: [Organizations], summary: Update profile (OWNER/MANAGER), parameters: [{ $ref: '#/components/parameters/id' }], responses: { '200': { description: OK }, '403': { $ref: '#/components/responses/Error' } } }
+  /services:
+    get:
+      tags: [Discovery]
+      security: []
+      parameters:
+        - $ref: '#/components/parameters/q'
+        - { name: category, in: query, schema: { type: string, enum: [CONSULTATION, LAB_TEST, DIAGNOSTIC, PROCEDURE, OTHER] } }
+        - { name: city, in: query, schema: { type: string } }
+      responses: { '200': { description: OK } }
+
+  # ───────── Queues ─────────
+  /queues:
+    get:
+      tags: [Queues]
+      security: []
+      parameters:
+        - { name: organizationId, in: query, schema: { type: string, format: uuid } }
+        - { name: doctorId, in: query, schema: { type: string, format: uuid } }
+        - { name: serviceId, in: query, schema: { type: string, format: uuid } }
+      responses: { '200': { description: '{ items: QueueSnapshot[] }' } }
+    post:
+      tags: [Queue operations]
+      summary: Create a queue (org OWNER/MANAGER, or the doctor for their own queue)
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/QueueInput' } } } }
+      responses: { '201': { description: Created, content: { application/json: { schema: { $ref: '#/components/schemas/QueueSnapshot' } } } }, '400': { $ref: '#/components/responses/Error' }, '403': { $ref: '#/components/responses/Error' } }
+  /queues/{id}:
+    parameters: [{ $ref: '#/components/parameters/id' }]
+    get: { tags: [Queues], security: [], responses: { '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/QueueSnapshot' } } } }, '404': { $ref: '#/components/responses/Error' } } }
+    patch: { tags: [Queue operations], requestBody: { content: { application/json: { schema: { $ref: '#/components/schemas/QueueInput' } } } }, responses: { '200': { description: OK } } }
+    delete: { tags: [Queue operations], summary: Archive (must be closed), responses: { '204': { $ref: '#/components/responses/NoContent' }, '409': { $ref: '#/components/responses/Error' } } }
+  /queues/{id}/status:
+    get:
+      tags: [Queues]
+      security: [{}, { bearer: [] }]
+      summary: Snapshot plus the caller's own entry when authenticated
+      parameters: [{ $ref: '#/components/parameters/id' }]
+      responses: { '200': { description: '{ snapshot: QueueSnapshot, myEntry: EntryView | null }' } }
+  /queues/{id}/me:
+    get: { tags: [Queues], parameters: [{ $ref: '#/components/parameters/id' }], responses: { '200': { description: '{ myEntry: EntryView | null }' } } }
+  /queues/{id}/join:
+    post:
+      tags: [Queues]
+      summary: Join as a patient and receive the next token
+      parameters: [{ $ref: '#/components/parameters/id' }]
+      responses:
+        '201': { description: Joined, content: { application/json: { schema: { $ref: '#/components/schemas/EntryView' } } } }
+        '403': { $ref: '#/components/responses/Error' }
+        '409': { description: 'QUEUE_CLOSED · QUEUE_FULL · ALREADY_IN_QUEUE · DOCTOR_UNAVAILABLE · TOO_MANY_ACTIVE_QUEUES', content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+  /queues/{id}/leave:
+    delete: { tags: [Queues], parameters: [{ $ref: '#/components/parameters/id' }], responses: { '200': { description: Left }, '409': { $ref: '#/components/responses/Error' } } }
+  /queues/{id}/staff:
+    get: { tags: [Queue operations], parameters: [{ $ref: '#/components/parameters/id' }], responses: { '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/StaffView' } } } }, '403': { $ref: '#/components/responses/Error' } } }
+  /queues/{id}/open:
+    post:
+      tags: [Queue operations]
+      summary: Open (or start a new day's session); resets tokens on a new day
+      parameters: [{ $ref: '#/components/parameters/id' }]
+      requestBody: { content: { application/json: { schema: { type: object, properties: { override: { type: boolean, description: Open outside operating hours (audited) } } } } } }
+      responses: { '200': { description: OK }, '409': { description: OUTSIDE_HOURS · DOCTOR_UNAVAILABLE · ORG_INACTIVE } }
+  /queues/{id}/pause:
+    post: { tags: [Queue operations], parameters: [{ $ref: '#/components/parameters/id' }], responses: { '200': { description: OK }, '409': { $ref: '#/components/responses/Error' } } }
+  /queues/{id}/resume:
+    post: { tags: [Queue operations], parameters: [{ $ref: '#/components/parameters/id' }], responses: { '200': { description: OK }, '409': { $ref: '#/components/responses/Error' } } }
+  /queues/{id}/close:
+    post: { tags: [Queue operations], summary: Close for the day (waiting → cancelled, skipped → no-show), parameters: [{ $ref: '#/components/parameters/id' }], responses: { '200': { description: OK } } }
+  /queues/{id}/next:
+    post:
+      tags: [Queue operations]
+      summary: Complete the current patient and call the next one
+      parameters: [{ $ref: '#/components/parameters/id' }]
+      responses: { '200': { description: '{ completed: "QF-024" | null, called: "QF-025" | null }' }, '409': { description: QUEUE_PAUSED · QUEUE_CLOSED } }
+  /queues/{id}/complete:
+    post: { tags: [Queue operations], summary: Mark the current patient served, parameters: [{ $ref: '#/components/parameters/id' }], responses: { '200': { description: OK }, '409': { $ref: '#/components/responses/Error' } } }
+  /queues/{id}/entries/{entryId}:
+    get: { tags: [Queue operations], summary: Patient details + visit timeline (audited), parameters: [{ $ref: '#/components/parameters/id' }, { $ref: '#/components/parameters/entryId' }], responses: { '200': { description: OK } } }
+  /queues/{id}/entries/{entryId}/call:
+    post: { tags: [Queue operations], summary: Call a specific waiting patient, parameters: [{ $ref: '#/components/parameters/id' }, { $ref: '#/components/parameters/entryId' }], responses: { '200': { description: OK } } }
+  /queues/{id}/entries/{entryId}/skip:
+    post: { tags: [Queue operations], parameters: [{ $ref: '#/components/parameters/id' }, { $ref: '#/components/parameters/entryId' }], requestBody: { content: { application/json: { schema: { type: object, properties: { reason: { type: string } } } } } }, responses: { '200': { description: OK } } }
+  /queues/{id}/entries/{entryId}/requeue:
+    post: { tags: [Queue operations], summary: Put a skipped patient back behind the grace positions, parameters: [{ $ref: '#/components/parameters/id' }, { $ref: '#/components/parameters/entryId' }], responses: { '200': { description: OK } } }
+  /queues/{id}/entries/{entryId}/no-show:
+    post: { tags: [Queue operations], parameters: [{ $ref: '#/components/parameters/id' }, { $ref: '#/components/parameters/entryId' }], responses: { '200': { description: OK } } }
+  /queues/{id}/entries/{entryId}/cancel:
+    post: { tags: [Queue operations], parameters: [{ $ref: '#/components/parameters/id' }, { $ref: '#/components/parameters/entryId' }], requestBody: { required: true, content: { application/json: { schema: { type: object, required: [reason], properties: { reason: { type: string, minLength: 3 } } } } } }, responses: { '200': { description: OK } } }
+  /queues/{id}/entries/{entryId}/priority:
+    post:
+      tags: [Queue operations]
+      summary: Controlled priority change (reason required, audited)
+      parameters: [{ $ref: '#/components/parameters/id' }, { $ref: '#/components/parameters/entryId' }]
+      requestBody: { required: true, content: { application/json: { schema: { type: object, required: [priority, reason], properties: { priority: { type: string, enum: [NORMAL, PRIORITY, EMERGENCY] }, reason: { type: string, minLength: 3 } } } } } }
+      responses: { '200': { description: OK } }
+  /queues/{id}/history:
+    get: { tags: [Queue operations], parameters: [{ $ref: '#/components/parameters/id' }, { name: date, in: query, schema: { type: string, format: date } }, { $ref: '#/components/parameters/page' }, { $ref: '#/components/parameters/pageSize' }], responses: { '200': { description: Paged entries } } }
+  /queues/{id}/events:
+    get: { tags: [Queue operations], parameters: [{ $ref: '#/components/parameters/id' }, { name: limit, in: query, schema: { type: integer, maximum: 200 } }], responses: { '200': { description: Event log, newest first } } }
+
+  # ───────── Patients ─────────
+  /patients/me:
+    get: { tags: [Patients], responses: { '200': { description: OK } } }
+    patch: { tags: [Patients], requestBody: { content: { application/json: { schema: { type: object, properties: { fullName: { type: string }, phone: { type: [string, 'null'] }, dateOfBirth: { type: [string, 'null'], format: date }, gender: { type: [string, 'null'], enum: [FEMALE, MALE, OTHER, PREFER_NOT_TO_SAY, null] } } } } } }, responses: { '200': { description: OK } } }
+  /patients/me/queues:
+    get: { tags: [Patients], summary: Active queues with live position, responses: { '200': { description: '{ items: (EntryView & { queue })[] }' } } }
+  /patients/me/history:
+    get: { tags: [Patients], parameters: [{ $ref: '#/components/parameters/page' }, { $ref: '#/components/parameters/pageSize' }], responses: { '200': { description: Paged visits } } }
+  /patients/{id}/history:
+    get: { tags: [Patients], summary: Self or admin (admin access audited), parameters: [{ $ref: '#/components/parameters/id' }], responses: { '200': { description: Paged visits }, '403': { $ref: '#/components/responses/Error' } } }
+
+  # ───────── Doctors (self-service) ─────────
+  /doctors/me:
+    get: { tags: [Doctors], responses: { '200': { description: Profile, schedules, queue snapshots } } }
+    patch: { tags: [Doctors], responses: { '200': { description: OK } } }
+  /doctors/me/availability:
+    patch: { tags: [Doctors], requestBody: { required: true, content: { application/json: { schema: { type: object, required: [isAvailable], properties: { isAvailable: { type: boolean } } } } } }, responses: { '200': { description: OK } } }
+  /doctors/me/schedule:
+    put: { tags: [Doctors], requestBody: { required: true, content: { application/json: { schema: { type: array, items: { type: object, properties: { dayOfWeek: { type: integer }, startTime: { type: string }, endTime: { type: string } } } } } } }, responses: { '200': { description: OK } } }
+
+  # ───────── Organization management ─────────
+  /organizations/mine/list:
+    get: { tags: [Organizations], responses: { '200': { description: Organizations the caller belongs to } } }
+  /organizations/{id}/manage:
+    get: { tags: [Organizations], summary: Full management view (staff only), parameters: [{ $ref: '#/components/parameters/id' }], responses: { '200': { description: OK } } }
+  /organizations/{id}/hours:
+    put: { tags: [Organizations], parameters: [{ $ref: '#/components/parameters/id' }], requestBody: { required: true, content: { application/json: { schema: { type: array, items: { $ref: '#/components/schemas/Hours' } } } } }, responses: { '200': { description: OK } } }
+  /organizations/{id}/staff:
+    post: { tags: [Organizations], summary: Link an existing staff account or create one, parameters: [{ $ref: '#/components/parameters/id' }], responses: { '201': { description: Created } } }
+  /organizations/{id}/staff/{memberId}:
+    delete: { tags: [Organizations], parameters: [{ $ref: '#/components/parameters/id' }, { name: memberId, in: path, required: true, schema: { type: string, format: uuid } }], responses: { '204': { $ref: '#/components/responses/NoContent' } } }
+  /organizations/{id}/doctors:
+    post: { tags: [Organizations], summary: Link an existing doctor or create a doctor account, parameters: [{ $ref: '#/components/parameters/id' }], responses: { '201': { description: Created } } }
+  /organizations/{id}/doctors/{doctorId}:
+    delete: { tags: [Organizations], parameters: [{ $ref: '#/components/parameters/id' }, { name: doctorId, in: path, required: true, schema: { type: string, format: uuid } }], responses: { '204': { $ref: '#/components/responses/NoContent' } } }
+  /organizations/{id}/services:
+    post: { tags: [Organizations], parameters: [{ $ref: '#/components/parameters/id' }], responses: { '201': { description: Created } } }
+  /organizations/{id}/services/{serviceId}:
+    patch: { tags: [Organizations], parameters: [{ $ref: '#/components/parameters/id' }, { name: serviceId, in: path, required: true, schema: { type: string, format: uuid } }], responses: { '200': { description: OK } } }
+    delete: { tags: [Organizations], summary: Soft-delete, parameters: [{ $ref: '#/components/parameters/id' }, { name: serviceId, in: path, required: true, schema: { type: string, format: uuid } }], responses: { '204': { $ref: '#/components/responses/NoContent' } } }
+
+  # ───────── Notifications ─────────
+  /notifications:
+    get: { tags: [Notifications], parameters: [{ $ref: '#/components/parameters/page' }, { $ref: '#/components/parameters/pageSize' }, { name: unread, in: query, schema: { type: string, enum: ['true', 'false'] } }], responses: { '200': { description: Paged notifications plus unread count } } }
+  /notifications/unread-count:
+    get: { tags: [Notifications], responses: { '200': { description: '{ unread: number }' } } }
+  /notifications/read-all:
+    post: { tags: [Notifications], responses: { '204': { $ref: '#/components/responses/NoContent' } } }
+  /notifications/{id}/read:
+    patch: { tags: [Notifications], parameters: [{ $ref: '#/components/parameters/id' }], responses: { '204': { $ref: '#/components/responses/NoContent' } } }
+
+  # ───────── Analytics ─────────
+  /analytics/doctor:
+    get: { tags: [Analytics], parameters: [{ $ref: '#/components/parameters/from' }, { $ref: '#/components/parameters/to' }, { $ref: '#/components/parameters/bucket' }], responses: { '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/Analytics' } } } } } }
+  /analytics/organizations/{id}:
+    get: { tags: [Analytics], parameters: [{ $ref: '#/components/parameters/id' }, { $ref: '#/components/parameters/from' }, { $ref: '#/components/parameters/to' }, { $ref: '#/components/parameters/bucket' }], responses: { '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/Analytics' } } } } } }
+  /analytics/queues/{id}:
+    get: { tags: [Analytics], parameters: [{ $ref: '#/components/parameters/id' }, { $ref: '#/components/parameters/from' }, { $ref: '#/components/parameters/to' }, { $ref: '#/components/parameters/bucket' }], responses: { '200': { description: OK } } }
+  /analytics/platform:
+    get: { tags: [Analytics], summary: Admin only, parameters: [{ $ref: '#/components/parameters/from' }, { $ref: '#/components/parameters/to' }, { $ref: '#/components/parameters/bucket' }], responses: { '200': { description: OK } } }
+
+  # ───────── Issues ─────────
+  /issues:
+    post: { tags: [Issues], requestBody: { required: true, content: { application/json: { schema: { type: object, required: [subject, description], properties: { subject: { type: string }, description: { type: string } } } } } }, responses: { '201': { description: Created } } }
+  /issues/mine:
+    get: { tags: [Issues], responses: { '200': { description: Paged } } }
+
+  # ───────── Admin ─────────
+  /admin/overview:
+    get: { tags: [Admin], responses: { '200': { description: Platform counters and recent audit events } } }
+  /admin/users:
+    get: { tags: [Admin], parameters: [{ $ref: '#/components/parameters/q' }, { name: role, in: query, schema: { $ref: '#/components/schemas/Role' } }, { name: active, in: query, schema: { type: string, enum: ['true', 'false'] } }, { $ref: '#/components/parameters/page' }], responses: { '200': { description: Paged } } }
+  /admin/users/{id}:
+    patch: { tags: [Admin], summary: Activate/deactivate or change role (revokes sessions), parameters: [{ $ref: '#/components/parameters/id' }], requestBody: { content: { application/json: { schema: { type: object, properties: { isActive: { type: boolean }, role: { $ref: '#/components/schemas/Role' } } } } } }, responses: { '200': { description: OK } } }
+  /admin/doctors:
+    get: { tags: [Admin], responses: { '200': { description: Paged } } }
+  /admin/organizations:
+    get: { tags: [Admin], responses: { '200': { description: Paged } } }
+  /admin/organizations/{id}:
+    patch: { tags: [Admin], parameters: [{ $ref: '#/components/parameters/id' }], requestBody: { content: { application/json: { schema: { type: object, properties: { isVerified: { type: boolean }, isActive: { type: boolean } } } } } }, responses: { '200': { description: OK } } }
+  /admin/services:
+    get: { tags: [Admin], responses: { '200': { description: Paged } } }
+  /admin/queues:
+    get: { tags: [Admin], parameters: [{ name: status, in: query, schema: { type: string, enum: [OPEN, PAUSED, CLOSED] } }], responses: { '200': { description: '{ items: QueueSnapshot[] }' } } }
+  /admin/audit-logs:
+    get: { tags: [Admin], parameters: [{ name: action, in: query, description: Prefix match e.g. "queue.", schema: { type: string } }, { name: entityType, in: query, schema: { type: string } }, { $ref: '#/components/parameters/page' }], responses: { '200': { description: Paged } } }
+  /admin/issues:
+    get: { tags: [Admin], responses: { '200': { description: Paged } } }
+  /admin/issues/{id}:
+    patch: { tags: [Admin], parameters: [{ $ref: '#/components/parameters/id' }], responses: { '200': { description: OK } } }
+  /admin/settings:
+    get: { tags: [Admin], responses: { '200': { description: Current platform settings } } }
+    put:
+      tags: [Admin]
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                maxActiveQueuesPerPatient: { type: integer, minimum: 1, maximum: 10 }
+                enforceOperatingHours: { type: boolean }
+                requeueGrace: { type: integer, minimum: 0, maximum: 10 }
+                allowJoinWhilePaused: { type: boolean }
+                maintenanceMessage: { type: string }
+      responses: { '200': { description: OK } }

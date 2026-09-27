@@ -1,0 +1,9 @@
+node_modules/
+dist/
+.env
+.env.local
+*.log
+server/src/generated/
+server/.pgdata/
+server/.pgdata-test/
+coverage/

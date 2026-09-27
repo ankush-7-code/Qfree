@@ -1,0 +1,39 @@
+# Render Blueprint — QFree API + PostgreSQL.
+# Render dashboard → New → Blueprint → pick this repository.
+# You will be asked for CORS_ORIGINS: the web app's origin, e.g. https://qfree.vercel.app
+services:
+  - type: web
+    name: qfree-api
+    runtime: node
+    plan: free
+    region: singapore
+    # Dev dependencies are needed to compile TypeScript and to run `prisma migrate deploy` at start.
+    buildCommand: npm ci --include=dev && npm run build -w server
+    startCommand: npm run start:prod -w server
+    healthCheckPath: /api/health
+    autoDeploy: true
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: DATABASE_URL
+        fromDatabase:
+          name: qfree-db
+          property: connectionString
+      - key: JWT_ACCESS_SECRET
+        generateValue: true
+      - key: JWT_REFRESH_SECRET
+        generateValue: true
+      - key: CORS_ORIGINS
+        sync: false
+      # Browser → Vercel proxy → Render load balancer → app: the client IP is two hops back.
+      - key: TRUST_PROXY
+        value: "2"
+      - key: LOG_LEVEL
+        value: info
+
+databases:
+  - name: qfree-db
+    plan: free
+    region: singapore
+    databaseName: qfree
+    postgresMajorVersion: "17"

@@ -1,0 +1,27 @@
+{
+  "name": "qfree",
+  "version": "1.0.0",
+  "private": true,
+  "description": "QFree — Know Your Queue. Save Your Time. Smart healthcare queue management system.",
+  "workspaces": [
+    "server",
+    "web"
+  ],
+  "scripts": {
+    "db:dev": "npm run db:dev -w server",
+    "dev:server": "npm run dev -w server",
+    "dev:web": "npm run dev -w web",
+    "build": "npm run build -w server && npm run build -w web",
+    "test": "npm test -w server && npm test -w web"
+  },
+  "allowScripts": {
+    "@embedded-postgres/windows-x64@18.4.0-beta.17": true,
+    "@prisma/engines@7.10.0": true,
+    "esbuild@0.28.2": true,
+    "prisma@7.10.0": true,
+    "@scarf/scarf": false
+  },
+  "engines": {
+    "node": ">=20.19"
+  }
+}
