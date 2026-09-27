@@ -35,20 +35,25 @@ doctorRouter.get('/', async (req, res) => {
     }),
     req.query,
   );
+  // Doctors who haven't joined a clinic yet are still listed (they have no city, so a city
+  // filter excludes them); doctors of suspended organizations are hidden.
+  const orgFilter = q.city
+    ? { organization: { isActive: true, city: { equals: q.city, mode: 'insensitive' as const } } }
+    : { OR: [{ organizationId: null }, { organization: { isActive: true } }] };
+  const textFilter = q.q
+    ? {
+        OR: [
+          { user: { fullName: { contains: q.q, mode: 'insensitive' as const } } },
+          { specialization: { contains: q.q, mode: 'insensitive' as const } },
+          { organization: { name: { contains: q.q, mode: 'insensitive' as const } } },
+        ],
+      }
+    : {};
   const where = {
     user: { isActive: true },
     organizationId: q.organizationId,
-    organization: { isActive: true, ...(q.city ? { city: { equals: q.city, mode: 'insensitive' as const } } : {}) },
     ...(q.specialization ? { specialization: { contains: q.specialization, mode: 'insensitive' as const } } : {}),
-    ...(q.q
-      ? {
-          OR: [
-            { user: { fullName: { contains: q.q, mode: 'insensitive' as const } } },
-            { specialization: { contains: q.q, mode: 'insensitive' as const } },
-            { organization: { name: { contains: q.q, mode: 'insensitive' as const } } },
-          ],
-        }
-      : {}),
+    AND: [orgFilter, textFilter],
   };
   const [items, total] = await Promise.all([
     prisma.doctor.findMany({ where, select: doctorPublic, orderBy: { user: { fullName: 'asc' } }, skip: (q.page - 1) * q.pageSize, take: q.pageSize }),

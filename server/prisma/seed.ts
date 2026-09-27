@@ -1,31 +1,19 @@
 /**
  * Demo data. Wipes the database and recreates:
- *  - 1 admin, 2 organization admins, 5 doctors, 40 patients (password for all: Password123)
- *  - 3 organizations (clinic, hospital, laboratory) with hours, services and queues
+ *  - 1 admin, 2 organization admins, 12 doctors, 40 patients (password Password123; admin may use DEMO_ADMIN_PASSWORD)
+ *  - Providers in Mumbai, Pune, Jammu, Srinagar and Delhi with hours, services and queues
  *  - Today's live session for Dr. Sharma: QF-001…023 served, QF-024 serving, QF-025…030 waiting
  *    → the demo patient (patient@qfree.dev) joins as QF-031 with 6 patients ahead
  *  - 30 days of simulated history (single-server queue simulation) for analytics
+ *
+ * With --auto on a database that already has data, only missing regional providers are added.
  */
 import bcrypt from 'bcryptjs';
-import type { EntryStatus, OrganizationType, Prisma } from '../src/generated/prisma/client.js';
+import type { OrganizationType, Prisma } from '../src/generated/prisma/client.js';
 import { prisma } from '../src/lib/prisma.js';
 import { localDate } from '../src/lib/time.js';
-import { formatToken, sortKeyForToken } from '../src/modules/queues/queue.logic.js';
-
-const TZ = 'Asia/Kolkata';
-const PASSWORD = 'Password123';
-const MIN = 60_000;
-
-// Deterministic PRNG so every seed produces the same data.
-let seed = 42;
-const rand = () => ((seed = (seed * 1664525 + 1013904223) % 2 ** 32) / 2 ** 32);
-const between = (a: number, b: number) => a + rand() * (b - a);
-const pick = <T>(xs: T[]) => xs[Math.floor(rand() * xs.length)];
-const normal = (mean: number, sd: number) => {
-  const u = Math.max(rand(), 1e-9);
-  const v = rand();
-  return mean + sd * Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * v);
-};
+import { doctorSchedule, PASSWORD, pick, rand, seedLiveSession, simulateHistory, TZ, week } from './demo-lib.js';
+import { addRegionalDemo, addRegionalDemoToExisting } from './demo-regions.js';
 
 const FIRST = ['Aarav', 'Vivaan', 'Aditya', 'Ananya', 'Diya', 'Ishaan', 'Kavya', 'Rohan', 'Saanvi', 'Arjun', 'Meera', 'Kabir', 'Priya', 'Rahul', 'Sneha', 'Vikram', 'Neha', 'Aditi', 'Karan', 'Pooja'];
 const LAST = ['Verma', 'Gupta', 'Singh', 'Patel', 'Reddy', 'Nair', 'Joshi', 'Das', 'Kapoor', 'Menon', 'Rao', 'Bose', 'Chopra', 'Pillai'];
@@ -48,7 +36,8 @@ async function main() {
   const existing = await prisma.user.count();
   if (existing > 0) {
     if (auto) {
-      console.log('Demo seed skipped: database already has data.');
+      const added = await addRegionalDemoToExisting(await bcrypt.hash(PASSWORD, 10));
+      console.log(added.length ? `Demo: added ${added.join(', ')}` : 'Demo seed skipped: database already has data.');
       return;
     }
     if (!process.argv.includes('--reset')) {
@@ -95,9 +84,6 @@ async function main() {
   }
 
   // ── Organizations ──
-  const week = (open: string, close: string, closedDays: number[] = []) =>
-    [0, 1, 2, 3, 4, 5, 6].map((d) => ({ dayOfWeek: d, openTime: open, closeTime: close, isClosed: closedDays.includes(d) }));
-
   const mkOrg = (name: string, type: OrganizationType, extra: Partial<Prisma.OrganizationCreateInput>, hours: ReturnType<typeof week>, owner: string) =>
     prisma.organization.create({
       data: { name, type, timezone: TZ, isVerified: true, address: '', city: 'Mumbai', ...extra, hours: { create: hours }, staff: { create: { userId: owner, staffRole: 'OWNER' } } } as Prisma.OrganizationCreateInput,
@@ -133,7 +119,7 @@ async function main() {
         doctor: {
           create: {
             organizationId: orgId, specialization, qualification, experienceYears, consultationMinutes, bio,
-            schedules: { create: [1, 2, 3, 4, 5, 6].flatMap((d) => [{ dayOfWeek: d, startTime: '09:00', endTime: '13:00' }, { dayOfWeek: d, startTime: '17:00', endTime: '21:00' }]) },
+            schedules: { create: doctorSchedule() },
           },
         },
       },
@@ -171,103 +157,30 @@ async function main() {
   const qXray = await mkQueue(lab.id, 'X-Ray Room', 'XR', 7, { serviceId: xray.id });
   const qPune = await mkQueue(puneLab.id, 'Check-up Desk', 'WL', 6, { serviceId: puneBlood.id });
 
-  // ── 30 days of history (simulated single-server queue) ──
-  const history: Prisma.QueueEntryCreateManyInput[] = [];
-  const queueSpecs = [
-    { q: qSharma, avg: 6, perDay: [22, 38], closedSun: true },
-    { q: qIyer, avg: 10, perDay: [12, 22], closedSun: true },
-    { q: qKhan, avg: 12, perDay: [10, 18], closedSun: false },
-    { q: qMehta, avg: 8, perDay: [12, 24], closedSun: false },
-    { q: qBlood, avg: 4, perDay: [40, 75], closedSun: false },
-    { q: qXray, avg: 7, perDay: [10, 20], closedSun: false },
-    { q: qPune, avg: 6, perDay: [8, 16], closedSun: false },
-  ];
-  for (let d = 30; d >= 1; d--) {
-    const day = new Date(now.getTime() - d * 86_400_000);
-    const sessionDate = localDate(TZ, day);
-    const dow = new Date(`${sessionDate}T12:00:00+05:30`).getUTCDay();
-    for (const spec of queueSpecs) {
-      if (spec.closedSun && dow === 0) continue;
-      const count = Math.round(between(spec.perDay[0], spec.perDay[1]) * (dow === 1 ? 1.25 : dow === 6 ? 0.8 : 1));
-      // Arrivals cluster in a morning peak (~10:00) and an evening peak (~18:30), local time.
-      const arrivals = Array.from({ length: count }, () => {
-        const morning = rand() < 0.62;
-        const hour = morning ? normal(10.2, 1.0) : normal(18.4, 0.9);
-        const h = Math.min(Math.max(hour, 8), 21.5);
-        return new Date(Date.parse(`${sessionDate}T00:00:00+05:30`) + h * 3_600_000);
-      }).sort((a, b) => a.getTime() - b.getTime());
+  // ── 30 days of history + today's live sessions ──
+  const patientIds = patients.map((p) => p.patient!.id);
+  const historyCount = await simulateHistory(
+    [
+      { q: qSharma, avg: 6, perDay: [22, 38], closedSun: true },
+      { q: qIyer, avg: 10, perDay: [12, 22], closedSun: true },
+      { q: qKhan, avg: 12, perDay: [10, 18], closedSun: false },
+      { q: qMehta, avg: 8, perDay: [12, 24], closedSun: false },
+      { q: qBlood, avg: 4, perDay: [40, 75], closedSun: false },
+      { q: qXray, avg: 7, perDay: [10, 20], closedSun: false },
+      { q: qPune, avg: 6, perDay: [8, 16], closedSun: false },
+    ],
+    patientIds,
+    now,
+  );
+  let liveCount = 0;
+  liveCount += await seedLiveSession({ q: qSharma, served: 23, waiting: 6, avg: 6 }, patientIds, now, sharma.id);
+  liveCount += await seedLiveSession({ q: qIyer, served: 9, waiting: 4, avg: 10 }, patientIds, now, iyer.id);
+  liveCount += await seedLiveSession({ q: qKhan, served: 5, waiting: 3, avg: 12, status: 'PAUSED' }, patientIds, now, khan.id);
+  liveCount += await seedLiveSession({ q: qBlood, served: 41, waiting: 8, avg: 4 }, patientIds, now);
+  liveCount += await seedLiveSession({ q: qXray, served: 7, waiting: 2, avg: 7 }, patientIds, now);
 
-      let free = 0;
-      arrivals.forEach((joinedAt, i) => {
-        const tokenNumber = i + 1;
-        const r = rand();
-        const status: EntryStatus = r < 0.07 ? 'CANCELLED' : r < 0.11 ? 'NO_SHOW' : 'COMPLETED';
-        const base = { queueId: spec.q.id, patientId: pick(patients).patient!.id, sessionDate, tokenNumber, tokenLabel: formatToken(spec.q.tokenPrefix, tokenNumber), sortKey: sortKeyForToken(tokenNumber), joinedAt, approachingNotified: true };
-        if (status === 'CANCELLED') {
-          history.push({ ...base, status, cancelledAt: new Date(joinedAt.getTime() + between(5, 40) * MIN), note: 'Left by patient' });
-          return;
-        }
-        const calledAt = new Date(Math.max(joinedAt.getTime() + between(1, 4) * MIN, free));
-        if (status === 'NO_SHOW') {
-          history.push({ ...base, status, calledAt, skipCount: 1 });
-          free = calledAt.getTime() + 1 * MIN;
-          return;
-        }
-        const service = Math.max(1.5, normal(spec.avg, spec.avg * 0.35)) * MIN;
-        const completedAt = new Date(calledAt.getTime() + service);
-        free = completedAt.getTime() + between(0.3, 1.5) * MIN;
-        history.push({ ...base, status, calledAt, completedAt, priority: rand() < 0.03 ? 'PRIORITY' : 'NORMAL' });
-      });
-    }
-  }
-  for (let i = 0; i < history.length; i += 1000) await prisma.queueEntry.createMany({ data: history.slice(i, i + 1000) });
-
-  // ── Today: live sessions ──
-  type LiveSpec = { q: typeof qSharma; served: number; waiting: number; avg: number; status?: 'OPEN' | 'PAUSED' };
-  const live: LiveSpec[] = [
-    { q: qSharma, served: 23, waiting: 6, avg: 6 },
-    { q: qIyer, served: 9, waiting: 4, avg: 10 },
-    { q: qKhan, served: 5, waiting: 3, avg: 12, status: 'PAUSED' },
-    { q: qBlood, served: 41, waiting: 8, avg: 4 },
-    { q: qXray, served: 7, waiting: 2, avg: 7 },
-  ];
-  for (const spec of live) {
-    const pool = [...patients].sort(() => rand() - 0.5);
-    const total = spec.served + 1 + spec.waiting;
-    const entries: Prisma.QueueEntryCreateManyInput[] = [];
-    for (let t = 1; t <= total; t++) {
-      const patientId = pool[(t - 1) % pool.length].patient!.id;
-      const base = { queueId: spec.q.id, patientId, sessionDate: today, tokenNumber: t, tokenLabel: formatToken(spec.q.tokenPrefix, t), sortKey: sortKeyForToken(t) };
-      if (t <= spec.served) {
-        const calledAt = new Date(now.getTime() - ((spec.served + 1 - t) * spec.avg + 4) * MIN);
-        entries.push({ ...base, status: 'COMPLETED', joinedAt: new Date(calledAt.getTime() - between(12, 40) * MIN), calledAt, completedAt: new Date(calledAt.getTime() + spec.avg * between(0.8, 1.15) * MIN), approachingNotified: true });
-      } else if (t === spec.served + 1) {
-        entries.push({ ...base, status: 'SERVING', joinedAt: new Date(now.getTime() - 38 * MIN), calledAt: new Date(now.getTime() - 3 * MIN), approachingNotified: true });
-      } else {
-        const k = t - spec.served - 1;
-        entries.push({ ...base, status: 'WAITING', joinedAt: new Date(now.getTime() - (spec.waiting - k + 1) * 5 * MIN), approachingNotified: k <= 4 });
-      }
-    }
-    await prisma.queueEntry.createMany({ data: entries });
-    await prisma.queue.update({
-      where: { id: spec.q.id },
-      data: {
-        status: spec.status ?? 'OPEN', sessionDate: today, lastTokenNumber: total, openedAt: new Date(now.getTime() - 4 * 3_600_000),
-        pausedAt: spec.status === 'PAUSED' ? new Date(now.getTime() - 10 * MIN) : null,
-      },
-    });
-    await prisma.queueEvent.create({ data: { queueId: spec.q.id, type: 'OPENED', actorId: null, createdAt: new Date(now.getTime() - 4 * 3_600_000) } });
-  }
-
-  // Full event trail for today's entries (JOINED → CALLED → COMPLETED).
-  const todays = await prisma.queueEntry.findMany({ where: { sessionDate: today } });
-  const events: Prisma.QueueEventCreateManyInput[] = [];
-  for (const e of todays) {
-    events.push({ queueId: e.queueId, entryId: e.id, actorId: null, type: 'JOINED', createdAt: e.joinedAt });
-    if (e.calledAt) events.push({ queueId: e.queueId, entryId: e.id, actorId: sharma.id, type: 'CALLED', createdAt: e.calledAt });
-    if (e.completedAt) events.push({ queueId: e.queueId, entryId: e.id, actorId: sharma.id, type: 'COMPLETED', createdAt: e.completedAt });
-  }
-  await prisma.queueEvent.createMany({ data: events });
+  // ── Jammu, Srinagar, Delhi ──
+  const regions = await addRegionalDemo({ passwordHash, clinicOwnerId: clinicAdmin.id, labOwnerId: labAdmin.id, patientIds, now });
 
   // ── Demo patient: past visits + notifications ──
   const pastSharma = await prisma.queueEntry.findMany({ where: { queueId: { in: [qSharma.id, qBlood.id, qMehta.id] }, status: { in: ['COMPLETED', 'CANCELLED'] }, sessionDate: { lt: today } }, orderBy: { joinedAt: 'desc' }, take: 6 });
@@ -287,9 +200,9 @@ async function main() {
     ],
   });
 
-  await prisma.auditLog.create({ data: { actorId: admin.id, action: 'system.seed', entityType: 'system', meta: { entries: history.length + todays.length } } });
+  await prisma.auditLog.create({ data: { actorId: admin.id, action: 'system.seed', entityType: 'system', meta: { entries: historyCount + liveCount, regions } } });
 
-  console.log(`Seeded ${history.length + todays.length} queue entries across ${queueSpecs.length} queues.`);
+  console.log(`Seeded Mumbai/Pune (${historyCount + liveCount} entries) and ${regions.length} regional providers.`);
   console.log(`Demo password: ${PASSWORD}${adminPassword ? ' (admin uses DEMO_ADMIN_PASSWORD)' : ' for every account'}`);
   console.log('  admin@qfree.dev · clinic@qfree.dev · lab@qfree.dev · reception@qfree.dev');
   console.log('  dr.sharma@qfree.dev · dr.iyer@qfree.dev · dr.khan@qfree.dev · patient@qfree.dev');

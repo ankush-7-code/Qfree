@@ -578,9 +578,19 @@ export function OrgAnalytics() {
 
 type OrgForm = { name: string; type: OrgType; description: string; address: string; city: string; phone: string; email: string; timezone: string };
 
+// Suggested while typing; any other city can still be entered.
+const SUGGESTED_CITIES = ['Delhi', 'Jammu', 'Mumbai', 'Pune', 'Srinagar'];
+
 function OrgFields({ f, set }: { f: OrgForm; set: (k: keyof OrgForm) => (e: { target: { value: string } }) => void }) {
+  const known = useQuery({ queryKey: ['cities'], queryFn: () => api.get<string[]>('/organizations/cities'), staleTime: 300_000 });
+  const cities = [...new Set([...SUGGESTED_CITIES, ...(known.data ?? [])])].sort();
   return (
     <>
+      <datalist id="qf-cities">
+        {cities.map((c) => (
+          <option key={c} value={c} />
+        ))}
+      </datalist>
       <Input label="Name" required minLength={2} value={f.name} onChange={set('name')} />
       <Select label="Type" value={f.type} onChange={set('type')}>
         {Object.entries(orgTypeLabel).map(([v, l]) => (
@@ -592,7 +602,7 @@ function OrgFields({ f, set }: { f: OrgForm; set: (k: keyof OrgForm) => (e: { ta
       <Textarea label="Description" value={f.description} onChange={set('description')} maxLength={1000} />
       <Input label="Address" required value={f.address} onChange={set('address')} />
       <div className="grid gap-4 sm:grid-cols-2">
-        <Input label="City" required value={f.city} onChange={set('city')} />
+        <Input label="City" required list="qf-cities" autoComplete="off" value={f.city} onChange={set('city')} />
         <Input label="Time zone" required value={f.timezone} onChange={set('timezone')} hint="e.g. Asia/Kolkata" />
         <Input label="Phone" type="tel" value={f.phone} onChange={set('phone')} />
         <Input label="Public email" type="email" value={f.email} onChange={set('email')} />
