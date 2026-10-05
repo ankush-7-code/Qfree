@@ -7,3 +7,4 @@ server/src/generated/
 server/.pgdata/
 server/.pgdata-test/
 coverage/
+*.tsbuildinfo
