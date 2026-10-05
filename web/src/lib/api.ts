@@ -28,28 +28,96 @@ export function onTokenChange(listener: (token: string | null) => void) {
   return () => listeners.delete(listener);
 }
 
+// ─── Server wake-up ───
+// The API's free hosting sleeps when idle and takes up to a minute to wake. Reads wait for it and
+// retry. Writes are only sent once the server is known to be awake: a write that times out at the
+// proxy may still be executed after the server wakes, so resending it could duplicate it.
+
+const UNAVAILABLE_MESSAGE = 'The QFree server is not reachable right now. Please check your connection and try again.';
+const AWAKE_WINDOW_MS = 4 * 60_000; // the server sleeps after 15 idle minutes
+const WAKE_TIMEOUT_MS = 120_000;
+const BANNER_DELAY_MS = 1_500;
+
+let lastOkAt = 0;
+let waking: Promise<boolean> | null = null;
+const wakeListeners = new Set<(waking: boolean) => void>();
+
+const unavailable = (status = 0) => new ApiError(status, 'SERVER_UNAVAILABLE', UNAVAILABLE_MESSAGE);
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+/** Subscribe to "waiting for the server to wake up" (true) / "done waiting" (false). */
+export function onServerWaking(listener: (waking: boolean) => void) {
+  wakeListeners.add(listener);
+  return () => {
+    wakeListeners.delete(listener);
+  };
+}
+
+async function ping() {
+  try {
+    const res = await fetch(`${API_URL}/api/health`, { cache: 'no-store' });
+    const body = await res.json().catch(() => null);
+    return res.ok && body?.status === 'ok';
+  } catch {
+    return false;
+  }
+}
+
+/** Resolves true once the API answers its health check (polling while it wakes), false after two minutes. */
+export function waitForServer(): Promise<boolean> {
+  waking ??= (async () => {
+    let shown = false;
+    const banner = setTimeout(() => {
+      shown = true;
+      wakeListeners.forEach((l) => l(true));
+    }, BANNER_DELAY_MS);
+    try {
+      const deadline = Date.now() + WAKE_TIMEOUT_MS;
+      do {
+        if (await ping()) {
+          lastOkAt = Date.now();
+          return true;
+        }
+        await sleep(3_000);
+      } while (Date.now() < deadline);
+      return false;
+    } finally {
+      clearTimeout(banner);
+      if (shown) wakeListeners.forEach((l) => l(false));
+      waking = null;
+    }
+  })();
+  return waking;
+}
+
+const ensureAwake = () => (Date.now() - lastOkAt < AWAKE_WINDOW_MS ? Promise.resolve(true) : waitForServer());
+
 let refreshing: Promise<unknown> | null = null;
 
 /** Exchange the refresh cookie for a new access token. Concurrent callers share one request. */
 export function refreshSession<T = unknown>(): Promise<T> {
-  const attempt = (retry: boolean): Promise<unknown> =>
-    fetch(`${API_URL}/api/auth/refresh`, { method: 'POST', credentials: 'include' }).then(async (res) => {
-      const body = await res.json().catch(() => ({}));
-      // Another tab rotated the cookie a moment ago; the browser now holds the new one.
-      if (res.status === 401 && body?.error?.code === 'REFRESH_RACE' && retry) {
-        await new Promise((r) => setTimeout(r, 300));
-        return attempt(false);
-      }
-      if (!res.ok) {
-        setAccessToken(null);
-        throw new ApiError(res.status, body?.error?.code ?? 'UNAUTHORIZED', body?.error?.message ?? 'Session expired');
-      }
-      setAccessToken(body.accessToken);
-      return body;
-    });
+  const attempt = async (retry: boolean): Promise<unknown> => {
+    if (!(await ensureAwake())) throw unavailable();
+    const res = await fetch(`${API_URL}/api/auth/refresh`, { method: 'POST', credentials: 'include' }).catch(() => null);
+    if (!res) throw unavailable();
+    const body = await res.json().catch(() => null);
+    if (!body?.error && !res.ok) throw unavailable(res.status);
+    lastOkAt = Date.now();
+    // Another tab rotated the cookie a moment ago; the browser now holds the new one.
+    if (res.status === 401 && body?.error?.code === 'REFRESH_RACE' && retry) {
+      await sleep(300);
+      return attempt(false);
+    }
+    if (!res.ok) {
+      setAccessToken(null);
+      throw new ApiError(res.status, body?.error?.code ?? 'UNAUTHORIZED', body?.error?.message ?? 'Session expired');
+    }
+    setAccessToken(body.accessToken);
+    return body;
+  };
   refreshing ??= attempt(true).finally(() => {
-      refreshing = null;
-    });
+    refreshing = null;
+  });
   return refreshing as Promise<T>;
 }
 
@@ -60,6 +128,8 @@ interface RequestOptions {
   body?: unknown;
   query?: Query;
   retry?: boolean;
+  /** Internal: false once a read has already waited for the server to wake. */
+  wake?: boolean;
 }
 
 export function qs(query?: Query) {
@@ -71,34 +141,47 @@ export function qs(query?: Query) {
 }
 
 export async function request<T>(path: string, opts: RequestOptions = {}): Promise<T> {
+  const method = opts.method ?? 'GET';
+  const isRead = method === 'GET';
+  if (!isRead && !(await ensureAwake())) throw unavailable();
+
   const headers: Record<string, string> = {};
   if (opts.body !== undefined) headers['Content-Type'] = 'application/json';
   if (accessToken) headers.Authorization = `Bearer ${accessToken}`;
 
+  // A read that hits a sleeping (or briefly unreachable) server waits for it, then tries once more.
+  const retryRead = async () => {
+    if (isRead && opts.wake !== false && (await waitForServer())) return request<T>(path, { ...opts, wake: false });
+    throw unavailable();
+  };
+
   const res = await fetch(`${API_URL}/api${path}${qs(opts.query)}`, {
-    method: opts.method ?? 'GET',
+    method,
     headers,
     credentials: 'include',
     body: opts.body !== undefined ? JSON.stringify(opts.body) : undefined,
-  });
+  }).catch(() => null);
+  if (!res) return retryRead();
 
   if (res.status === 401 && opts.retry !== false && !path.startsWith('/auth/')) {
     try {
       await refreshSession();
-    } catch {
+    } catch (err) {
+      if (err instanceof ApiError && err.code === 'SERVER_UNAVAILABLE') throw err;
       throw new ApiError(401, 'UNAUTHORIZED', 'Your session has expired. Please sign in again.');
     }
     return request<T>(path, { ...opts, retry: false });
   }
 
-  if (res.status === 204) return undefined as T;
+  if (res.status === 204) {
+    lastOkAt = Date.now();
+    return undefined as T;
+  }
   const body = await res.json().catch(() => null);
+  // No QFree error body means the reply came from the proxy or host, not the API itself.
+  if (!res.ok && !body?.error) return retryRead();
+  lastOkAt = Date.now();
   if (!res.ok) {
-    // No QFree error body means the reply came from a proxy or host, not the API itself
-    // (API not deployed, or a free-tier server still waking up).
-    if (!body?.error) {
-      throw new ApiError(res.status, 'SERVER_UNAVAILABLE', 'The QFree server is not reachable right now. It may be starting up — please try again in a minute.');
-    }
     throw new ApiError(res.status, body.error.code ?? 'ERROR', body.error.message ?? `Request failed (${res.status})`, body.error.details);
   }
   return body as T;
@@ -119,6 +202,6 @@ export function errorMessage(err: unknown): string {
     const first = fields && Object.entries(fields).find(([, v]) => v?.length);
     return first ? `${first[0]}: ${first[1][0]}` : err.message;
   }
-  if (err instanceof Error) return err.message.includes('fetch') ? 'Cannot reach the server. Check your connection.' : err.message;
+  if (err instanceof Error) return err.message.includes('fetch') ? UNAVAILABLE_MESSAGE : err.message;
   return 'Something went wrong';
 }

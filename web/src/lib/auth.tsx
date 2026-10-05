@@ -1,6 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
-import { api, refreshSession, setAccessToken } from './api';
+import { api, ApiError, refreshSession, setAccessToken } from './api';
 import type { Me, Role } from './types';
 
 interface Session {
@@ -62,8 +62,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
     refreshSession<Session>()
       .then((s) => setUser(s.user))
-      .catch(() => {
-        rememberSession(false);
+      .catch((err) => {
+        // Only a real "session invalid" answer forgets the session; an unreachable server does not.
+        if (err instanceof ApiError && err.status === 401) rememberSession(false);
         setUser(null);
       })
       .finally(() => setLoading(false));
