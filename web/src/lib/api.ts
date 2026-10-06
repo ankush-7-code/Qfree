@@ -35,7 +35,7 @@ export function onTokenChange(listener: (token: string | null) => void) {
 
 const UNAVAILABLE_MESSAGE = 'The QFree server is not reachable right now. Please check your connection and try again.';
 const AWAKE_WINDOW_MS = 4 * 60_000; // the server sleeps after 15 idle minutes
-const WAKE_TIMEOUT_MS = 120_000;
+const WAKE_TIMEOUT_MS = 180_000; // free hosting can take a couple of minutes to wake
 const BANNER_DELAY_MS = 1_500;
 
 let lastOkAt = 0;

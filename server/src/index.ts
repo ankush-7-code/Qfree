@@ -27,9 +27,20 @@ server.listen(env.PORT, () => {
 });
 const timer = setInterval(housekeeping, env.HOUSEKEEPING_INTERVAL_MS);
 
+// Keep the instance awake by requesting our own public URL (it must go through the host's
+// front door to count as traffic, so localhost won't do).
+const keepAliveUrl = env.KEEP_ALIVE && env.RENDER_EXTERNAL_URL ? `${env.RENDER_EXTERNAL_URL.replace(/\/$/, '')}/api/health` : null;
+const keepAlive = keepAliveUrl
+  ? setInterval(() => {
+      fetch(keepAliveUrl, { signal: AbortSignal.timeout(30_000) }).catch((err) => logger.warn({ err }, 'keep-alive ping failed'));
+    }, env.KEEP_ALIVE_INTERVAL_MS)
+  : null;
+if (keepAliveUrl) logger.info({ keepAliveUrl }, 'keep-alive enabled');
+
 async function shutdown(signal: string) {
   logger.info({ signal }, 'shutting down');
   clearInterval(timer);
+  if (keepAlive) clearInterval(keepAlive);
   server.close();
   await prisma.$disconnect();
   process.exit(0);

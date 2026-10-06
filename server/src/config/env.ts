@@ -13,6 +13,11 @@ const schema = z.object({
   LOG_LEVEL: z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace', 'silent']).default('info'),
   TRUST_PROXY: z.coerce.number().int().min(0).default(1),
   HOUSEKEEPING_INTERVAL_MS: z.coerce.number().int().positive().default(5 * 60_000),
+  // Free hosting sleeps after ~15 idle minutes; when enabled the API requests its own public
+  // health URL (RENDER_EXTERNAL_URL is set by Render) so it stays awake.
+  KEEP_ALIVE: z.enum(['true', 'false']).default('false').transform((v) => v === 'true'),
+  KEEP_ALIVE_INTERVAL_MS: z.coerce.number().int().positive().default(10 * 60_000),
+  RENDER_EXTERNAL_URL: z.string().url().optional(),
 });
 
 const parsed = schema.safeParse(process.env);

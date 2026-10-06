@@ -1,0 +1,4 @@
+{
+  "//": "Bump when demo data or demo upgrades change; the server then re-runs the idempotent demo seed once.",
+  "version": 3
+}

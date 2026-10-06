@@ -8,6 +8,7 @@
  *
  * With --auto on a database that already has data, only missing regional providers are added.
  */
+import { readFileSync } from 'node:fs';
 import bcrypt from 'bcryptjs';
 import type { OrganizationType, Prisma } from '../src/generated/prisma/client.js';
 import { prisma } from '../src/lib/prisma.js';
@@ -28,6 +29,12 @@ async function wipe() {
   await prisma.$executeRawUnsafe(`TRUNCATE TABLE ${tables.map((t) => `"${t}"`).join(', ')} CASCADE`);
 }
 
+/** Record the applied demo version so server starts can skip this script (see scripts/start.mjs). */
+async function markDemoVersion() {
+  const { version } = JSON.parse(readFileSync(new URL('./demo-version.json', import.meta.url), 'utf8'));
+  await prisma.systemSetting.upsert({ where: { key: 'demo.version' }, create: { key: 'demo.version', value: { version } }, update: { value: { version } } });
+}
+
 async function main() {
   // --auto (used at server start): seed only when SEED_DEMO=true and the database is still empty.
   const auto = process.argv.includes('--auto');
@@ -41,6 +48,7 @@ async function main() {
       const upgrades = await applyDemoUpgrades();
       const changes = [...added.map((a) => `added ${a}`), ...upgrades];
       console.log(changes.length ? `Demo: ${changes.join('; ')}` : 'Demo seed skipped: database already has data.');
+      await markDemoVersion();
       return;
     }
     if (!process.argv.includes('--reset')) {
@@ -204,6 +212,7 @@ async function main() {
   });
 
   const upgrades = await applyDemoUpgrades();
+  await markDemoVersion();
   await prisma.auditLog.create({ data: { actorId: admin.id, action: 'system.seed', entityType: 'system', meta: { entries: historyCount + liveCount, regions, upgrades } } });
 
   console.log(`Seeded Mumbai/Pune (${historyCount + liveCount} entries) and ${regions.length} regional providers.`);

@@ -66,7 +66,7 @@ describe('API client with a sleeping server', () => {
     const calls = mockFetch(() => proxyTimeout());
     const { api, errorMessage } = await freshApi();
     const result = api.post('/queues/q1/join').catch((e) => e);
-    await vi.advanceTimersByTimeAsync(130_000);
+    await vi.advanceTimersByTimeAsync(190_000);
     const err = await result;
     expect(errorMessage(err)).toMatch(/not reachable/);
     expect(calls.some((c) => c.method === 'POST')).toBe(false);

@@ -30,6 +30,11 @@ services:
         value: "2"
       - key: LOG_LEVEL
         value: info
+      # Free instances sleep after ~15 idle minutes and take a while to wake. The API pings its own
+      # public URL every 10 minutes to stay awake. This uses ~744 of the 750 free instance hours a
+      # month, so a second free service in the same workspace would run out of hours.
+      - key: KEEP_ALIVE
+        value: "true"
       # Load demo data on start, only while the database is empty (never overwrites real data).
       # Set to "false" for a clean production launch.
       - key: SEED_DEMO

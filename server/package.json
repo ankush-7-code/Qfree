@@ -15,7 +15,7 @@
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
     "postinstall": "prisma generate",
-    "start:prod": "prisma migrate deploy && tsx prisma/seed.ts --auto && node dist/index.js",
+    "start:prod": "node scripts/start.mjs",
     "seed:reset": "tsx prisma/seed.ts --reset"
   },
   "dependencies": {
