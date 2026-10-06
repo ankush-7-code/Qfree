@@ -15,6 +15,8 @@ export function QueueTile({ q, to }: { q: QueueSnapshot; to?: string }) {
         <div className="min-w-0">
           <p className="font-semibold">{q.doctor?.name ?? q.service?.name ?? q.name}</p>
           <p className="text-sm text-ink-2">{q.doctor ? q.doctor.specialization : q.name}</p>
+          {/* A doctor can run several queues (e.g. morning OPD, follow-ups); the queue name tells them apart. */}
+          {q.doctor && <p className="truncate text-sm text-muted">{q.name}</p>}
         </div>
         <ChevronRight className="size-5 shrink-0 text-muted group-hover:text-brand" aria-hidden />
       </div>
