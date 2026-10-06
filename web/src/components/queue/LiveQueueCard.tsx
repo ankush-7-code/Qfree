@@ -101,7 +101,7 @@ export function LiveQueueCard({ snapshot, myEntry, onLeave, leaving, compact }: 
           <div role="alert" className="mt-4 flex items-center gap-3 rounded-2xl bg-st-active px-4 py-4 text-white">
             <BellRing className="size-8 shrink-0" aria-hidden />
             <div>
-              <p className="text-xl font-bold">It's your turn!</p>
+              <p className="text-xl font-bold">{myEntry.entry.recalledAt ? "You're being called again!" : "It's your turn!"}</p>
               <p>Please go to {snapshot.doctor?.name ?? snapshot.name} now.</p>
             </div>
           </div>

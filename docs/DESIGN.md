@@ -157,8 +157,8 @@ Conventions: JSON everywhere. Errors are `{ "error": { "code", "message", "detai
 | Auth | `POST /api/auth/register` · `login` · `refresh` · `logout` · `change-password` · `GET /api/auth/me` |
 | Discovery (public) | `GET /api/doctors` · `/doctors/:id` · `/doctors/specializations` · `GET /api/organizations` · `/organizations/:id` · `/organizations/cities` · aliases `GET /api/clinics`, `/api/laboratories` · `GET /api/services` |
 | Queue status (public) | `GET /api/queues` · `/queues/:id` · `/queues/:id/status` (adds caller's own entry when signed in) |
-| Patient | `POST /api/queues/:id/join` · `DELETE /api/queues/:id/leave` · `GET /api/queues/:id/me` · `GET/PATCH /api/patients/me` · `GET /api/patients/me/queues` · `/patients/me/history` · `/patients/:id/history` |
-| Queue operations (doctor / staff / admin) | `GET /queues/:id/staff` · `POST /queues/:id/open` · `pause` · `resume` · `close` · `next` · `complete` · `POST /queues/:id/entries/:entryId/call` · `skip` · `requeue` · `no-show` · `cancel` · `priority` · `GET /queues/:id/entries/:entryId` · `/history` · `/events` |
+| Patient | `GET /api/queues/:id/booking-slots` · `POST /api/queues/:id/bookings` · `DELETE /api/queues/:id/bookings/:entryId` · `POST /api/queues/:id/join` · `DELETE /api/queues/:id/leave` · `GET /api/queues/:id/me` · `GET/PATCH /api/patients/me` · `GET /api/patients/me/queues` · `/patients/me/bookings` · `/patients/me/history` · `/patients/:id/history` |
+| Queue operations (doctor / staff / admin) | `GET /queues/:id/staff` · `POST /queues/:id/open` · `pause` · `resume` · `close` · `next` · `complete` · `POST /queues/:id/entries/:entryId/call` · `skip` · `recall` · `no-show` · `cancel` · `priority` · `POST /queues/:id/walk-ins` · `/joins/stop` · `/joins/reopen` · `GET /queues/:id/bookings` · `GET /queues/:id/entries/:entryId` · `/history` · `/events` |
 | Queue configuration | `POST /api/queues` · `PATCH /api/queues/:id` · `DELETE /api/queues/:id` (archive) |
 | Doctor self-service | `GET/PATCH /api/doctors/me` · `PATCH /doctors/me/availability` · `PUT /doctors/me/schedule` |
 | Organization | `POST /api/organizations` · `PATCH /:id` · `GET /:id/manage` · `PUT /:id/hours` · `POST/DELETE /:id/staff` · `POST/DELETE /:id/doctors` · `POST/PATCH/DELETE /:id/services` · `GET /organizations/mine/list` |
@@ -227,16 +227,41 @@ Authorization is enforced **per resource** in `modules/access.ts` (e.g. `canMana
 **State machine** (`queue.service.ts`)
 
 ```
-WAITING ──call──▶ SERVING ──complete / call next──▶ COMPLETED
+BOOKED (future day) ──that day's session opens──▶ WAITING
+WAITING ──call──▶ SERVING "Called" ──complete / call next──▶ COMPLETED
    │                 │
-   │ leave / cancel  └──skip (not present)──▶ SKIPPED ──requeue──▶ WAITING
+   │ leave / cancel  └──not present──▶ SKIPPED "Missed" ──recall (doctor decides)──▶ SERVING "Recalled"
    ▼                                           │
 CANCELLED                                      └──no-show / queue closes──▶ NO_SHOW
 ```
 
+Patient-facing status names: **Booked, Waiting, Called, Missed, Recalled, Completed, Cancelled** (plus No-show). Each entry also records how the token was obtained (`source`): `ADVANCE` (booked), `SAME_DAY` (joined online on the day) or `RECEPTION` (added on the spot).
+
 **Consistency.** Every mutation runs in one transaction that starts with `SELECT … FOR UPDATE` on the queue row, which serializes operations per queue while other queues proceed in parallel. Tokens come from `UPDATE queues SET last_token_number = last_token_number + 1 RETURNING`, so they are gap-free and unique. Two partial unique indexes back this up at the database level: one active entry per patient per queue, and one serving patient per queue. Notifications and broadcasts are sent only **after commit**.
 
-**Ordering.** Waiting patients are sorted by `(priority band DESC, sort_key ASC, token ASC)`. Bands: `EMERGENCY > PRIORITY > NORMAL`, FIFO inside each. `sort_key = token × 1000` on join. The gaps let a skipped patient who returns be re-inserted **behind `requeueGrace` (default 2) waiting patients** instead of jumping to the front. If there is no integer gap left, the band is renumbered.
+**Ordering.** Waiting patients are sorted by `(priority band DESC, sort_key ASC, token ASC)`. Bands: `EMERGENCY > PRIORITY > NORMAL`, FIFO inside each. `sort_key = token × 1000`.
+
+**Missed patients.** A patient who isn't present when called becomes **Missed** and is taken out of the line. They are **never re-inserted**, so the active queue is not disturbed. The board lists them separately and highlights them once the waiting list is empty. The doctor or staff **recall** a missed patient when they decide; recalling while others still wait asks for confirmation. A recall completes the current patient, calls the missed one (`recalled_at` set, shown as "Recalled"), and notifies them. Alternatively they can be marked no-show. At the end of the session, any still missed become no-shows.
+
+**Advance booking.** Each queue sets `advanceBookingDays` (0 = off; 1, 2, 3 … days ahead) and optionally `advanceBookingQuota`, the places per day that can be booked so the rest stay free for on-the-spot patients.
+- **Bookable days:** tomorrow through `today + N`. A day is bookable if the doctor consults that weekday (their published timings, within the clinic's opening days) and places remain.
+- **Tokens:** a booking takes the next token *for that date* (numbered in booking order, under the same queue lock). The patient sees an estimated time, found by walking the day's consultation slots at the average pace (a token that doesn't fit the morning slot moves to the evening one).
+- **On the day:** when the session opens, that day's bookings become WAITING in token order, and same-day/reception tokens continue after the last booked number. So booked patients are seen first.
+- **Cleanup:** bookings for a day whose session never opened are cancelled by housekeeping, and the patient is notified.
+- **Limits:** one booking per patient per queue per day (partial unique index), and at most 5 upcoming bookings per patient (platform setting).
+
+**Closing rules (new patients for today).** A pure function (`sameDayJoinBlock`) decides, in the organization's local time:
+1. Queue closed?
+2. Organization inactive?
+3. Doctor unavailable?
+4. Stopped by the doctor?
+5. Daily limit (`capacity`) reached? Bookings, same-day and reception patients all count.
+6. Past the "stop accepting at" time (`joinCutoffTime`)?
+7. Online same-day joining turned off (`allowSameDayJoin`)?
+
+The patient limit and the cutoff time are independent, and whichever is reached first stops new joins. The doctor can **stop new patients** (the queue keeps serving) or **reopen**. Reopening lifts today's time rule but never the patient limit (raise the limit instead). These manual flags reset when the next day's session opens. **Close for today** ends the session and can be undone by reopening the queue the same day.
+
+**On-the-spot patients.** Doctor or staff can add a patient who is present (e.g. no smartphone), with name and optional phone. They get a sign-in-less record and the next token. Because reception acts on the doctor's instruction, the cutoff time and "stop new patients" don't apply, but the daily limit does unless explicitly overridden (audited).
 
 **Controlled priority.** Only staff or the doctor can set it, only while the patient is waiting, a reason of at least 3 characters is mandatory, and the change is written to both `queue_events` and `audit_logs`.
 
@@ -244,11 +269,11 @@ CANCELLED                                      └──no-show / queue closes�
 
 **Learning the pace.** On each completion, `avg ← 0.8·avg + 0.2·clamp(sample, avg/3, 3·avg)`, bounded to 1–60 min. Clamping means a mis-click (5 s) or a forgotten "complete" (3 h) barely moves it.
 
-**Rules on join:** the queue is OPEN (or PAUSED, if allowed) for *today's* session, the org is active, the doctor is available, the patient has no active entry in this queue and is under the platform-wide cap, and capacity is not exhausted.
+**Rules on join:** the queue is OPEN (or PAUSED, if allowed) for *today's* session, no closing rule applies (above), the patient has no active entry in this queue, and they are under the platform-wide cap of simultaneous queues.
 
-**Sessions and hours.** Tokens restart daily, and `session_date` is computed in the organization's timezone. Opening outside operating hours returns `409 OUTSIDE_HOURS` unless explicitly overridden (and audited). A housekeeping job runs every 5 minutes and at startup. It closes queues left open past midnight: waiting entries become cancelled (with a notification), serving entries become completed, and skipped entries become no-shows.
+**Sessions and hours.** Tokens restart daily, and `session_date` is computed in the organization's timezone. Opening outside operating hours returns `409 OUTSIDE_HOURS` unless explicitly overridden (and audited). A housekeeping job runs every 5 minutes and at startup. It closes queues left open past midnight: waiting entries become cancelled (with a notification), serving entries become completed, and missed entries become no-shows. It also expires bookings for days whose session never opened.
 
-**Notifications.** Joined, turn approaching (once, when `ahead ≤ approachingThreshold`, default 3), your turn, skipped, re-queued, cancelled by staff, paused/resumed, closed, and priority granted.
+**Notifications.** Booked, booking cancelled/expired, today's queue opened (for booked patients), joined, turn approaching (once, when `ahead ≤ approachingThreshold`, default 3), your turn, missed, recalled, cancelled by staff, paused/resumed, closed, and priority granted.
 
 ## 8. Real-time architecture
 
@@ -291,6 +316,7 @@ The client keeps one connection, authenticates with the access token in the hand
 | 5 Providers | Organizations, doctors, services, staff, hours, schedules | ✅ |
 | 6 Frontend | Public, patient, doctor, clinic/lab and admin apps | ✅ verified in browser |
 | 7 Analytics & admin | Aggregates, charts, reports/CSV, users, verification, issues, settings | ✅ |
-| 8 Next | Walk-in patients added by reception (no smartphone) · QR code to join at the door · SMS/WhatsApp channel (implement `NotificationChannel`) · Web Push via service worker · appointment booking using `appointments` → check-in creates an entry · multilingual UI (Hindi, Marathi, …) · payments · lab report tracking · multi-branch rollups · ML wait prediction from `queue_events` · Redis adapter · Playwright E2E in CI | planned |
+| 8 Booking & closing rules | Advance booking with booking window, quota and estimated times · reception walk-ins · missed → recall without disturbing the line · daily limit + cutoff time + manual stop/reopen · doctor availability & location page | ✅ tested |
+| 9 Next | QR code to join at the door · SMS/WhatsApp channel (implement `NotificationChannel`) · Web Push via service worker · arrival check-in for booked patients · multilingual UI (Hindi, Marathi, …) · payments · lab report tracking · multi-branch rollups · ML wait prediction from `queue_events` · Redis adapter · Playwright E2E in CI | planned |
 
 The extension points already exist: `NotificationChannel.register`, `appointments.queue_entry_id`, `Organization` supporting many per owner (branches), the `queue_events` history as training data, and `system_settings` for feature flags.

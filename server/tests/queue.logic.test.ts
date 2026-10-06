@@ -6,9 +6,14 @@ import {
   nextAverage,
   orderWaiting,
   progressFraction,
-  renumberBand,
-  requeueSortKey,
   sortKeyForToken,
+  sameDayJoinBlock,
+  bookableDates,
+  addDays,
+  weekdayOf,
+  dayAvailability,
+  estimatedTimeForPosition,
+  type JoinRuleInput,
   type Orderable,
 } from '../src/modules/queues/queue.logic.js';
 import { isWithinHours, localParts } from '../src/lib/time.js';
@@ -25,28 +30,84 @@ describe('ordering', () => {
     expect(ordered.map((x) => x.tokenNumber)).toEqual([3, 5, 2, 4, 1]);
   });
 
-  it('respects a re-inserted sort key', () => {
-    const ordered = orderWaiting([e(10), e(11), e(12), e(4, 'NORMAL', 11_500)]);
-    expect(ordered.map((x) => x.tokenNumber)).toEqual([10, 11, 4, 12]);
+  it('keeps booked tokens (numbered first) ahead of on-the-spot tokens', () => {
+    expect(orderWaiting([e(9), e(2), e(5)]).map((x) => x.tokenNumber)).toEqual([2, 5, 9]);
   });
 });
 
-describe('requeue sort key', () => {
-  it('places the patient after the grace positions', () => {
-    const band = [{ sortKey: 10_000 }, { sortKey: 11_000 }, { sortKey: 12_000 }];
-    expect(requeueSortKey(band, 2)).toBe(11_500);
+describe('closing rules', () => {
+  const base: JoinRuleInput = {
+    status: 'OPEN',
+    orgActive: true,
+    doctorAvailable: true,
+    joinsStopped: false,
+    joinsReopened: false,
+    capacity: 30,
+    issued: 10,
+    cutoffTime: '16:00',
+    localTime: '11:00',
+    allowSameDayJoin: true,
+  };
+
+  it('accepts patients while under both the limit and the cutoff time', () => {
+    expect(sameDayJoinBlock(base)).toBeNull();
   });
 
-  it('goes to the back when fewer than grace patients wait', () => {
-    expect(requeueSortKey([{ sortKey: 5_000 }], 2)).toBe(6_000);
-    expect(requeueSortKey([], 2)).toBe(0);
+  it('closes at the patient limit or the cutoff time, whichever comes first', () => {
+    expect(sameDayJoinBlock({ ...base, issued: 30 })).toBe('FULL');
+    expect(sameDayJoinBlock({ ...base, localTime: '16:00' })).toBe('CUTOFF_PASSED');
+    expect(sameDayJoinBlock({ ...base, issued: 30, localTime: '17:00' })).toBe('FULL');
+    expect(sameDayJoinBlock({ ...base, cutoffTime: null, localTime: '23:00' })).toBeNull();
   });
 
-  it('asks for a renumber when keys are adjacent, and renumbering creates room', () => {
-    const band = [{ id: 'a', sortKey: 1 }, { id: 'b', sortKey: 2 }, { id: 'c', sortKey: 3 }];
-    expect(requeueSortKey(band, 2)).toBeNull();
-    const renum = renumberBand(band);
-    expect(requeueSortKey(renum, 2)).toBe(2_500);
+  it('lets the doctor stop and reopen joins; reopening lifts the time rule but not the limit', () => {
+    expect(sameDayJoinBlock({ ...base, joinsStopped: true })).toBe('STOPPED_BY_DOCTOR');
+    expect(sameDayJoinBlock({ ...base, localTime: '17:00', joinsReopened: true })).toBeNull();
+    expect(sameDayJoinBlock({ ...base, issued: 30, joinsReopened: true })).toBe('FULL');
+  });
+
+  it('blocks online same-day joins when the doctor only allows bookings and reception', () => {
+    expect(sameDayJoinBlock({ ...base, allowSameDayJoin: false })).toBe('SAME_DAY_DISABLED');
+  });
+
+  it('reports a closed queue first', () => {
+    expect(sameDayJoinBlock({ ...base, status: 'CLOSED', issued: 99 })).toBe('QUEUE_CLOSED');
+  });
+});
+
+describe('booking calendar', () => {
+  it('offers tomorrow through the booking window', () => {
+    expect(bookableDates('2026-10-30', 3)).toEqual(['2026-10-31', '2026-11-01', '2026-11-02']);
+    expect(bookableDates('2026-10-30', 0)).toEqual([]);
+    expect(addDays('2026-12-31', 1)).toBe('2027-01-01');
+    expect(weekdayOf('2026-10-06')).toBe(2); // Tuesday
+  });
+
+  const hours = [0, 1, 2, 3, 4, 5, 6].map((d) => ({ dayOfWeek: d, openTime: '08:00', closeTime: '20:00', isClosed: d === 0 }));
+  const schedules = [
+    { dayOfWeek: 1, startTime: '17:00', endTime: '20:00' },
+    { dayOfWeek: 1, startTime: '09:00', endTime: '12:00' },
+  ];
+
+  it('uses the doctor timings on clinic days, the opening hours otherwise, and nothing when closed', () => {
+    expect(dayAvailability(1, hours, schedules)).toEqual([
+      { start: '09:00', end: '12:00' },
+      { start: '17:00', end: '20:00' },
+    ]);
+    expect(dayAvailability(2, hours, schedules)).toEqual([]); // doctor not consulting on Tuesday
+    expect(dayAvailability(2, hours, null)).toEqual([{ start: '08:00', end: '20:00' }]);
+    expect(dayAvailability(0, hours, null)).toEqual([]); // clinic closed on Sunday
+  });
+
+  it('estimates the time of the Nth patient across the day’s slots', () => {
+    const slots = [
+      { start: '09:00', end: '12:00' },
+      { start: '17:00', end: '20:00' },
+    ];
+    expect(estimatedTimeForPosition(slots, 1, 600)).toBe('09:00');
+    expect(estimatedTimeForPosition(slots, 7, 600)).toBe('10:00');
+    expect(estimatedTimeForPosition(slots, 19, 600)).toBe('17:00'); // morning holds 18 patients
+    expect(estimatedTimeForPosition(slots, 37, 600)).toBeNull(); // beyond the evening slot
   });
 });
 

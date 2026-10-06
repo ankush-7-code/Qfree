@@ -4,10 +4,12 @@
  */
 import { prisma, type Db } from '../../lib/prisma.js';
 import { notFound } from '../../lib/errors.js';
-import { localDate } from '../../lib/time.js';
+import { localDate, localParts } from '../../lib/time.js';
 import {
   entryPhase,
   estimateWaitSeconds,
+  JOIN_BLOCK_MESSAGE,
+  sameDayJoinBlock,
   orderWaiting,
   progressFraction,
   toMinutes,
@@ -18,7 +20,15 @@ const queueInclude = {
   organization: {
     select: { id: true, name: true, type: true, city: true, address: true, timezone: true, isActive: true, hours: true },
   },
-  doctor: { select: { id: true, specialization: true, isAvailable: true, user: { select: { id: true, fullName: true } } } },
+  doctor: {
+    select: {
+      id: true,
+      specialization: true,
+      isAvailable: true,
+      user: { select: { id: true, fullName: true } },
+      schedules: { select: { dayOfWeek: true, startTime: true, endTime: true } },
+    },
+  },
   service: { select: { id: true, name: true, category: true } },
 } as const;
 
@@ -99,8 +109,18 @@ export function buildSnapshot(state: QueueState) {
   const lastCalled = entries
     .filter((e) => e.calledAt)
     .sort((a, b) => b.calledAt!.getTime() - a.calledAt!.getTime())[0];
-  const doctorAvailable = queue.doctor ? queue.doctor.isAvailable : true;
-  const accepting = status !== 'CLOSED' && queue.organization.isActive && doctorAvailable && issued < queue.capacity;
+  const joinBlock = sameDayJoinBlock({
+    status,
+    orgActive: queue.organization.isActive,
+    doctorAvailable: queue.doctor ? queue.doctor.isAvailable : true,
+    joinsStopped: queue.joinsStopped,
+    joinsReopened: queue.joinsReopened,
+    capacity: queue.capacity,
+    issued,
+    cutoffTime: queue.joinCutoffTime,
+    localTime: localParts(queue.organization.timezone, now).time,
+    allowSameDayJoin: queue.allowSameDayJoin,
+  });
 
   return {
     id: queue.id,
@@ -120,7 +140,19 @@ export function buildSnapshot(state: QueueState) {
     avgServiceMinutes: Math.round((queue.avgServiceSeconds / 60) * 10) / 10,
     estimatedWaitMinutes: toMinutes(estimateWaitSeconds(waiting.length, queue.avgServiceSeconds, serving?.calledAt ?? null, now)),
     approachingThreshold: queue.approachingThreshold,
-    isAcceptingPatients: accepting,
+    isAcceptingPatients: joinBlock === null,
+    joinBlock,
+    joinBlockMessage: joinBlock ? JOIN_BLOCK_MESSAGE[joinBlock] : null,
+    missedCount: entries.filter((e) => e.status === 'SKIPPED').length,
+    closingRules: {
+      capacity: queue.capacity,
+      cutoffTime: queue.joinCutoffTime,
+      joinsStopped: queue.joinsStopped,
+      joinsReopened: queue.joinsReopened,
+    },
+    allowSameDayJoin: queue.allowSameDayJoin,
+    advanceBookingDays: queue.advanceBookingDays,
+    advanceBookingQuota: queue.advanceBookingQuota,
     pausedAt: queue.status === 'PAUSED' ? queue.pausedAt : null,
     updatedAt: now,
   };
@@ -150,8 +182,10 @@ export function buildEntryView(state: QueueState, entry: StateEntry) {
       priority: entry.priority,
       joinedAt: entry.joinedAt,
       calledAt: entry.calledAt,
+      recalledAt: entry.recalledAt,
       completedAt: entry.completedAt,
       cancelledAt: entry.cancelledAt,
+      source: entry.source,
     },
     currentToken: serving?.tokenLabel ?? null,
     patientsAhead,
@@ -187,8 +221,10 @@ export function buildStaffView(state: QueueState) {
     skipCount: e.skipCount,
     joinedAt: e.joinedAt,
     calledAt: e.calledAt,
+    recalledAt: e.recalledAt,
     completedAt: e.completedAt,
     cancelledAt: e.cancelledAt,
+    source: e.source,
     note: e.note,
     patient: {
       name: e.patient.user.fullName,
@@ -213,7 +249,8 @@ export function buildStaffView(state: QueueState) {
       position: i + 1,
       estimatedWaitMinutes: toMinutes(estimateWaitSeconds(i, queue.avgServiceSeconds, serving?.calledAt ?? null, now)),
     })),
-    skipped: entries.filter((e) => e.status === 'SKIPPED').map(staffEntry),
+    // Missed patients wait outside the line; the doctor recalls them when they decide.
+    missed: entries.filter((e) => e.status === 'SKIPPED').map(staffEntry),
     finished: entries
       .filter((e) => ['COMPLETED', 'CANCELLED', 'NO_SHOW'].includes(e.status))
       .sort((a, b) => b.updatedAt.getTime() - a.updatedAt.getTime())
@@ -223,7 +260,8 @@ export function buildStaffView(state: QueueState) {
       total: entries.length,
       waiting: waiting.length,
       served: count('COMPLETED'),
-      skipped: count('SKIPPED'),
+      missed: count('SKIPPED'),
+      recalled: entries.filter((e) => e.recalledAt).length,
       cancelled: count('CANCELLED'),
       noShow: count('NO_SHOW'),
       avgWaitMinutes: round(avg(waited)),

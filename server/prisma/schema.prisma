@@ -48,13 +48,23 @@ enum QueueStatus {
   CLOSED
 }
 
+/// Shown to people as: Booked, Waiting, Called (SERVING; "Recalled" when recalled_at is set),
+/// Missed (SKIPPED), Completed, Cancelled, No-show.
 enum EntryStatus {
+  BOOKED // advance booking for a future session date; becomes WAITING when that day's session opens
   WAITING
   SERVING
   COMPLETED
   SKIPPED
   CANCELLED
   NO_SHOW
+}
+
+/// How the patient got their token.
+enum EntrySource {
+  SAME_DAY // joined online on the consultation day
+  ADVANCE // booked ahead for a future date
+  RECEPTION // added on the spot by doctor or staff
 }
 
 enum Priority {
@@ -72,10 +82,15 @@ enum QueueEventType {
   CALLED
   COMPLETED
   SKIPPED
-  REQUEUED
+  REQUEUED // legacy: missed patients are now recalled, not re-inserted
   CANCELLED
   NO_SHOW
   PRIORITY_CHANGED
+  BOOKED
+  RECALLED
+  JOINS_STOPPED
+  JOINS_REOPENED
+  WALK_IN_ADDED
 }
 
 enum AppointmentStatus {
@@ -278,7 +293,20 @@ model Queue {
   name                 String
   tokenPrefix          String      @default("QF") @map("token_prefix")
   status               QueueStatus @default(CLOSED)
+  /// Closing rule: maximum patients per day (bookings + same-day + reception).
   capacity             Int         @default(100)
+  /// Closing rule: stop accepting new patients from this local time ("HH:MM"); null = no time limit.
+  /// With `capacity`, whichever is reached first closes new joins.
+  joinCutoffTime       String?     @map("join_cutoff_time")
+  /// Whether patients may join online on the consultation day.
+  allowSameDayJoin     Boolean     @default(true) @map("allow_same_day_join")
+  /// How many days ahead patients may book (0 = no advance booking).
+  advanceBookingDays   Int         @default(0) @map("advance_booking_days")
+  /// Max places per day that can be booked in advance; null = up to `capacity`. Keeps room for on-the-spot patients.
+  advanceBookingQuota  Int?        @map("advance_booking_quota")
+  /// Per-session manual controls (reset when a new day's session opens).
+  joinsStopped         Boolean     @default(false) @map("joins_stopped") // doctor stopped new patients
+  joinsReopened        Boolean     @default(false) @map("joins_reopened") // doctor reopened after the cutoff time
   sessionDate          String?     @map("session_date") // YYYY-MM-DD in org timezone
   lastTokenNumber      Int         @default(0) @map("last_token_number")
   avgServiceSeconds    Int         @default(600) @map("avg_service_seconds") // EWMA
@@ -311,14 +339,16 @@ model QueueEntry {
   tokenLabel          String      @map("token_label")
   status              EntryStatus @default(WAITING)
   priority            Priority    @default(NORMAL)
-  /// Ordering key inside a priority band (smaller = earlier). Spaced by 1000 so
-  /// skipped patients can be re-inserted between others without renumbering.
+  source              EntrySource @default(SAME_DAY)
+  /// Ordering key inside a priority band (smaller = earlier); tokenNumber × 1000.
   sortKey             Int         @map("sort_key")
   skipCount           Int         @default(0) @map("skip_count")
   approachingNotified Boolean     @default(false) @map("approaching_notified")
   note                String?
   joinedAt            DateTime    @default(now()) @map("joined_at")
   calledAt            DateTime?   @map("called_at")
+  /// Set when a missed patient is called again (status SERVING → shown as "Recalled").
+  recalledAt          DateTime?   @map("recalled_at")
   completedAt         DateTime?   @map("completed_at")
   cancelledAt         DateTime?   @map("cancelled_at")
   updatedAt           DateTime    @updatedAt @map("updated_at")

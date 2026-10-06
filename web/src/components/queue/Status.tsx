@@ -2,7 +2,7 @@ import clsx from 'clsx';
 import { CheckCircle2, CircleSlash, Clock, Hourglass, PauseCircle, PlayCircle, Radio, XCircle } from 'lucide-react';
 import type { ReactNode } from 'react';
 import type { EntryStatus, Phase, QueueSnapshot, QueueStatus } from '../../lib/types';
-import { entryStatusLabel } from '../../lib/format';
+import { statusLabelFor } from '../../lib/format';
 
 type Tone = 'active' | 'waiting' | 'approach' | 'closed' | 'paused' | 'neutral';
 
@@ -68,6 +68,7 @@ export function PhaseBadge({ phase, size }: { phase: Phase; size?: 'md' | 'lg' }
 }
 
 const entryTone: Record<EntryStatus, Tone> = {
+  BOOKED: 'approach',
   WAITING: 'waiting',
   SERVING: 'active',
   COMPLETED: 'neutral',
@@ -76,11 +77,12 @@ const entryTone: Record<EntryStatus, Tone> = {
   NO_SHOW: 'closed',
 };
 
-export function EntryStatusBadge({ status }: { status: EntryStatus }) {
+/** Booked · Waiting · Called · Missed · Recalled · Completed · Cancelled · No-show */
+export function EntryStatusBadge({ status, recalledAt }: { status: EntryStatus; recalledAt?: string | null }) {
   return (
     <span className={clsx('inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-sm font-medium', toneClass[entryTone[status]].pill)}>
       <span className={clsx('size-2 rounded-full', toneClass[entryTone[status]].dot)} aria-hidden />
-      {entryStatusLabel[status]}
+      {statusLabelFor({ status, recalledAt })}
     </span>
   );
 }

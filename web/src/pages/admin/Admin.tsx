@@ -525,7 +525,7 @@ export function AdminAnalytics() {
 interface Settings {
   maxActiveQueuesPerPatient: number;
   enforceOperatingHours: boolean;
-  requeueGrace: number;
+  maxUpcomingBookingsPerPatient: number;
   allowJoinWhilePaused: boolean;
   maintenanceMessage: string;
 }
@@ -561,13 +561,13 @@ export function AdminSettings() {
             hint="Stops people from holding places in many queues."
           />
           <Input
-            label="Re-queue grace positions"
+            label="Maximum upcoming bookings per patient"
             type="number"
-            min={0}
-            max={10}
-            value={cur.requeueGrace}
-            onChange={(e) => setS({ ...cur, requeueGrace: Number(e.target.value) })}
-            hint="A skipped patient who returns goes back in line behind this many waiting patients."
+            min={1}
+            max={20}
+            value={cur.maxUpcomingBookingsPerPatient}
+            onChange={(e) => setS({ ...cur, maxUpcomingBookingsPerPatient: Number(e.target.value) })}
+            hint="Stops one person from reserving many future appointments."
           />
           <Toggle checked={cur.enforceOperatingHours} onChange={(v) => setS({ ...cur, enforceOperatingHours: v })} label="Require confirmation to open queues outside operating hours" />
           <Toggle checked={cur.allowJoinWhilePaused} onChange={(v) => setS({ ...cur, allowJoinWhilePaused: v })} label="Allow patients to join paused queues" />

@@ -12,6 +12,7 @@ import { Alert, Card, ErrorState, Spinner } from '../../components/ui/primitives
 import { useToast } from '../../components/ui/Toast';
 import { LiveQueueCard, ProviderHeading } from '../../components/queue/LiveQueueCard';
 import { QueueStatusBadge } from '../../components/queue/Status';
+import { BookingPanel } from '../../components/queue/BookingPanel';
 
 function NotificationPermission() {
   const [state, setState] = useState(() => ('Notification' in window ? Notification.permission : 'unsupported'));
@@ -66,7 +67,11 @@ export function QueuePage() {
       {myEntry && (active || myEntry.phase === 'DONE' || myEntry.phase === 'SKIPPED') ? (
         <>
           <LiveQueueCard snapshot={snapshot} myEntry={myEntry} onLeave={() => leave.mutate()} leaving={leave.isPending} />
-          {myEntry.phase === 'SKIPPED' && <Alert tone="waiting">You were not present when called. Please speak to the reception desk — they can put you back in line.</Alert>}
+          {myEntry.phase === 'SKIPPED' && (
+            <Alert tone="waiting">
+              You were not present when called. The doctor may call you again after the current queue — please stay nearby or speak to the reception desk.
+            </Alert>
+          )}
           {active && <NotificationPermission />}
         </>
       ) : (
@@ -80,7 +85,7 @@ export function QueuePage() {
               <dt className="flex items-center justify-center gap-1 text-sm text-ink-2">
                 <Ticket className="size-4" aria-hidden /> Now serving
               </dt>
-              <dd className="tabular text-2xl font-bold">{snapshot.currentToken ?? '—'}</dd>
+              <dd className="tabular whitespace-nowrap text-xl font-bold sm:text-2xl">{snapshot.currentToken ?? '—'}</dd>
             </div>
             <div className="rounded-2xl bg-surface-2 p-3">
               <dt className="flex items-center justify-center gap-1 text-sm text-ink-2">
@@ -104,11 +109,15 @@ export function QueuePage() {
             )}
             {!snapshot.isAcceptingPatients ? (
               <Alert tone="waiting">
-                {snapshot.status === 'CLOSED'
-                  ? 'This queue is closed right now. Please check back during opening hours.'
-                  : snapshot.remainingCapacity === 0
-                    ? 'This queue is full for today.'
-                    : 'The queue is not accepting new patients at the moment.'}
+                {snapshot.joinBlockMessage ?? 'The queue is not accepting new patients at the moment.'}
+                {snapshot.advanceBookingDays > 0 && (
+                  <>
+                    {' '}
+                    <a href="#book" className="font-semibold underline">
+                      Book a later day
+                    </a>
+                  </>
+                )}
               </Alert>
             ) : !user ? (
               <LinkButton to={`/login?next=${encodeURIComponent(location.pathname)}`} size="xl" className="w-full" icon={<LogIn className="size-6" />}>
@@ -131,6 +140,7 @@ export function QueuePage() {
           {myEntry?.phase === 'CANCELLED' && <p className="mt-4 text-center text-ink-2">You left this queue at {time(myEntry.entry.cancelledAt)}.</p>}
         </Card>
       )}
+      <BookingPanel queueId={snapshot.id} />
       <p className="text-center text-sm text-muted">
         <Link to={`/providers/${snapshot.organization.id}`} className="hover:text-brand hover:underline">
           More about {snapshot.organization.name}

@@ -5,7 +5,7 @@ import { prisma } from './prisma.js';
 export const settingsSchema = z.object({
   maxActiveQueuesPerPatient: z.number().int().min(1).max(10),
   enforceOperatingHours: z.boolean(),
-  requeueGrace: z.number().int().min(0).max(10),
+  maxUpcomingBookingsPerPatient: z.number().int().min(1).max(20),
   allowJoinWhilePaused: z.boolean(),
   maintenanceMessage: z.string().max(300),
 });
@@ -14,7 +14,7 @@ export type Settings = z.infer<typeof settingsSchema>;
 export const DEFAULT_SETTINGS: Settings = {
   maxActiveQueuesPerPatient: 3,
   enforceOperatingHours: true,
-  requeueGrace: 2,
+  maxUpcomingBookingsPerPatient: 5,
   allowJoinWhilePaused: true,
   maintenanceMessage: '',
 };

@@ -27,7 +27,7 @@ const NAV: Record<Role, NavItem[]> = {
   PATIENT: [
     { to: '/patient', label: 'Dashboard', icon: i(LayoutDashboard), end: true },
     { to: '/search', label: 'Find care', icon: i(Search) },
-    { to: '/patient/queues', label: 'My queues', icon: i(ListOrdered) },
+    { to: '/patient/queues', label: 'Appointments & queues', icon: i(ListOrdered) },
     { to: '/patient/history', label: 'Visit history', icon: i(History) },
     { to: '/notifications', label: 'Notifications', icon: i(Bell) },
     { to: '/patient/profile', label: 'Profile', icon: i(User) },

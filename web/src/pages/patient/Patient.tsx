@@ -1,11 +1,11 @@
 import { useState, type FormEvent } from 'react';
 import { Link } from 'react-router';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { History, Search, Ticket } from 'lucide-react';
+import { CalendarCheck, History, MapPin, Search, Ticket } from 'lucide-react';
 import { api, errorMessage } from '../../lib/api';
 import { useAuth } from '../../lib/auth';
-import type { EntryStatus, EntryView, Paged } from '../../lib/types';
-import { date, minutes, time } from '../../lib/format';
+import type { EntryStatus, EntryView, MyBooking, Paged } from '../../lib/types';
+import { clock, date, dayLabel, minutes, time } from '../../lib/format';
 import { queueKey, useQueueLive } from '../../hooks/useLive';
 import { Button, LinkButton } from '../../components/ui/Button';
 import { Alert, Card, CardTitle, EmptyState, ErrorState, Input, PageHeader, Pagination, Select, Spinner, Table, Td } from '../../components/ui/primitives';
@@ -55,6 +55,58 @@ interface HistoryItem {
   queue: { id: string; name: string; organization: { id: string; name: string }; doctor: { id: string; specialization: string; user: { fullName: string } } | null; service: { name: string } | null };
 }
 
+/** Upcoming advance bookings with token, day, estimated time and location. */
+function UpcomingAppointments({ emptyHint }: { emptyHint?: boolean }) {
+  const qc = useQueryClient();
+  const toast = useToast();
+  const { data } = useQuery({ queryKey: ['patient', 'bookings'], queryFn: () => api.get<{ items: MyBooking[] }>('/patients/me/bookings') });
+  const cancel = useMutation({
+    mutationFn: (b: MyBooking) => api.del(`/queues/${b.queue.id}/bookings/${b.entryId}`),
+    onSuccess: () => {
+      toast({ tone: 'info', title: 'Booking cancelled' });
+      qc.invalidateQueries({ queryKey: ['patient', 'bookings'] });
+    },
+    onError: (err) => toast({ tone: 'error', title: 'Could not cancel', body: errorMessage(err) }),
+  });
+  if (!data || (!data.items.length && !emptyHint)) return null;
+  return (
+    <Card className="mt-6">
+      <CardTitle>
+        <span className="flex items-center gap-2">
+          <CalendarCheck className="size-5 text-brand" aria-hidden /> Upcoming appointments
+        </span>
+      </CardTitle>
+      {data.items.length === 0 ? (
+        <p className="text-ink-2">No upcoming bookings. Open a doctor's page to book a later day.</p>
+      ) : (
+        <ul className="divide-y divide-line">
+          {data.items.map((b) => (
+            <li key={b.entryId} className="flex flex-wrap items-center justify-between gap-3 py-3">
+              <div className="min-w-0">
+                <p className="font-semibold">
+                  {dayLabel(b.date)} · token <span className="tabular">{b.tokenLabel}</span>
+                </p>
+                <p className="text-ink-2">
+                  <Link to={`/queues/${b.queue.id}`} className="hover:text-brand hover:underline">
+                    {b.queue.doctor?.name ?? b.queue.service?.name ?? b.queue.name}
+                  </Link>{' '}
+                  · estimated around <strong className="text-ink">{clock(b.estimatedTime)}</strong> (patient #{b.position})
+                </p>
+                <p className="flex items-center gap-1 text-sm text-muted">
+                  <MapPin className="size-3.5" aria-hidden /> {b.queue.organization.name}, {b.queue.organization.address}, {b.queue.organization.city}
+                </p>
+              </div>
+              <Button variant="secondary" size="sm" loading={cancel.isPending && cancel.variables?.entryId === b.entryId} onClick={() => cancel.mutate(b)}>
+                Cancel
+              </Button>
+            </li>
+          ))}
+        </ul>
+      )}
+    </Card>
+  );
+}
+
 export function PatientDashboard() {
   const { user } = useAuth();
   const active = useActiveQueues();
@@ -98,6 +150,8 @@ export function PatientDashboard() {
         </Card>
       )}
 
+      <UpcomingAppointments />
+
       <Card className="mt-6">
         <CardTitle
           action={
@@ -134,7 +188,7 @@ export function MyQueues() {
   const active = useActiveQueues();
   return (
     <div>
-      <PageHeader title="My queues" subtitle="Every queue you are currently waiting in." />
+      <PageHeader title="My appointments & queues" subtitle="Queues you are in today, and appointments you have booked." />
       {active.isLoading ? (
         <Spinner />
       ) : active.data?.items.length ? (
@@ -145,9 +199,10 @@ export function MyQueues() {
         </div>
       ) : (
         <Card>
-          <EmptyState icon={<Ticket className="size-12" />} title="No active queues" action={<LinkButton to="/search">Find care</LinkButton>} />
+          <EmptyState icon={<Ticket className="size-12" />} title="Not in a queue today" action={<LinkButton to="/search">Find care</LinkButton>} />
         </Card>
       )}
+      <UpcomingAppointments emptyHint />
     </div>
   );
 }

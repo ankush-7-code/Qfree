@@ -128,28 +128,53 @@ describe('serving the queue', () => {
     expect(audit?.meta).toMatchObject({ to: 'EMERGENCY', reason: 'Chest pain' });
   });
 
-  it('skips an absent patient, re-queues them behind the grace positions, then marks no-show', async () => {
+  it('moves a missed patient out of the line without disturbing it, then recalls them on the doctor’s decision', async () => {
     const { queueId, doctor } = await setupOpenQueue();
-    const ps = await Promise.all(Array.from({ length: 5 }, () => register()));
+    const ps = await Promise.all(Array.from({ length: 4 }, () => register()));
     for (const p of ps) await join(queueId, p);
+    const tokens = (es: { tokenLabel: string }[]) => es.map((e) => e.tokenLabel);
 
-    await api().post(`/api/queues/${queueId}/next`).set(doctor.auth); // QF-001 serving
+    await api().post(`/api/queues/${queueId}/next`).set(doctor.auth); // QF-001 called
     let view = await staffView(queueId, doctor);
-    const skipped = await api().post(`/api/queues/${queueId}/entries/${view.serving.id}/skip`).set(doctor.auth).send({ reason: 'Not present' });
-    expect(skipped.body.skipped).toBe('QF-001');
+    const missed = await api().post(`/api/queues/${queueId}/entries/${view.serving.id}/skip`).set(doctor.auth).send({ reason: 'Not present' });
+    expect(missed.body.skipped).toBe('QF-001');
 
     view = await staffView(queueId, doctor);
     expect(view.serving).toBeNull();
-    expect(view.skipped.map((e: { tokenLabel: string }) => e.tokenLabel)).toEqual(['QF-001']);
+    expect(tokens(view.missed)).toEqual(['QF-001']);
+    expect(tokens(view.waiting)).toEqual(['QF-002', 'QF-003', 'QF-004']);
 
-    await api().post(`/api/queues/${queueId}/entries/${view.skipped[0].id}/requeue`).set(doctor.auth);
+    // The patient shows up later: the active queue carries on undisturbed.
+    expect((await api().post(`/api/queues/${queueId}/next`).set(doctor.auth)).body.called).toBe('QF-002');
     view = await staffView(queueId, doctor);
-    expect(view.waiting.map((e: { tokenLabel: string }) => e.tokenLabel)).toEqual(['QF-002', 'QF-003', 'QF-001', 'QF-004', 'QF-005']);
+    expect(tokens(view.waiting)).toEqual(['QF-003', 'QF-004']);
+    expect(tokens(view.missed)).toEqual(['QF-001']);
 
-    const again = await api().post(`/api/queues/${queueId}/entries/${view.waiting[2].id}/skip`).set(doctor.auth).send({});
-    expect(again.status).toBe(200);
-    const noShow = await api().post(`/api/queues/${queueId}/entries/${view.waiting[2].id}/no-show`).set(doctor.auth);
-    expect(noShow.body.noShow).toBe('QF-001');
+    // Work through the queue, then the doctor recalls the missed patient.
+    await api().post(`/api/queues/${queueId}/next`).set(doctor.auth);
+    await api().post(`/api/queues/${queueId}/next`).set(doctor.auth);
+    const recall = await api().post(`/api/queues/${queueId}/entries/${view.missed[0].id}/recall`).set(doctor.auth);
+    expect(recall.body).toMatchObject({ completed: 'QF-004', recalled: 'QF-001', stillWaiting: 0 });
+
+    view = await staffView(queueId, doctor);
+    expect(view.serving).toMatchObject({ tokenLabel: 'QF-001', status: 'SERVING' });
+    expect(view.serving.recalledAt).toBeTruthy();
+    expect(view.missed).toEqual([]);
+    const mine = await api().get(`/api/queues/${queueId}/me`).set(ps[0].auth);
+    expect(mine.body.myEntry).toMatchObject({ phase: 'YOUR_TURN' });
+    expect(mine.body.myEntry.entry.recalledAt).toBeTruthy();
+    const notes = await api().get('/api/notifications').set(ps[0].auth);
+    expect(notes.body.items.map((n: { type: string }) => n.type)).toEqual(expect.arrayContaining(['SKIPPED', 'RECALLED']));
+  });
+
+  it('lets the doctor mark a missed patient as a no-show instead', async () => {
+    const { queueId, doctor } = await setupOpenQueue();
+    await join(queueId, await register());
+    await api().post(`/api/queues/${queueId}/next`).set(doctor.auth);
+    const view = await staffView(queueId, doctor);
+    await api().post(`/api/queues/${queueId}/entries/${view.serving.id}/skip`).set(doctor.auth).send({});
+    expect((await api().post(`/api/queues/${queueId}/entries/${view.serving.id}/no-show`).set(doctor.auth)).body.noShow).toBe('QF-001');
+    expect((await api().post(`/api/queues/${queueId}/entries/${view.serving.id}/recall`).set(doctor.auth)).status).toBe(409);
   });
 
   it('lets a waiting patient leave but not while being served', async () => {

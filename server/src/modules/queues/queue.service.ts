@@ -4,29 +4,39 @@
  * "serving" slot stay consistent under concurrent requests. Notifications and socket
  * broadcasts are collected during the transaction and only sent after it commits.
  *
- *   WAITING ──call──▶ SERVING ──complete/next──▶ COMPLETED
+ *   BOOKED (future date) ──that day's session opens──▶ WAITING
+ *   WAITING ──call──▶ SERVING "Called" ──complete/next──▶ COMPLETED
  *      │                 │
- *      │ leave/cancel    └──skip──▶ SKIPPED ──requeue──▶ WAITING
- *      ▼                                │
- *   CANCELLED                           └──no-show / queue closes──▶ NO_SHOW
+ *      │ leave/cancel    └──not present──▶ SKIPPED "Missed" ──recall (doctor decides)──▶ SERVING "Recalled"
+ *      ▼                                       │
+ *   CANCELLED                                  └──no-show / queue closes──▶ NO_SHOW
+ *
+ * Missed patients are never slotted back into the line, so the active queue is not disturbed.
  */
-import type { Priority, QueueEventType } from '../../generated/prisma/client.js';
+import crypto from 'node:crypto';
+import bcrypt from 'bcryptjs';
+import type { EntrySource, Priority, QueueEventType } from '../../generated/prisma/client.js';
 import { prisma, type Tx } from '../../lib/prisma.js';
 import { AppError, conflict, forbidden, notFound } from '../../lib/errors.js';
-import { isWithinHours } from '../../lib/time.js';
+import { isWithinHours, localParts } from '../../lib/time.js';
 import { getSettings } from '../../lib/settings.js';
 import { audit } from '../../lib/audit.js';
 import { publishQueue } from '../../realtime/publish.js';
 import { sendNotifications, type NotificationInput } from '../notifications/notification.service.js';
 import {
+  bookableDates,
+  dayAvailability,
+  estimatedTimeForPosition,
   estimateWaitSeconds,
   formatToken,
+  JOIN_BLOCK_MESSAGE,
   nextAverage,
   orderWaiting,
-  renumberBand,
-  requeueSortKey,
+  sameDayJoinBlock,
   sortKeyForToken,
   toMinutes,
+  weekdayOf,
+  type JoinBlock,
   type PriorityLevel,
 } from './queue.logic.js';
 import { effectiveStatus, getMyEntry, isSessionCurrent, loadQueue, todayFor, type LoadedQueue } from './queue.state.js';
@@ -161,6 +171,46 @@ function requireActiveSession(queue: LoadedQueue, allowPaused = false) {
   if (status === 'PAUSED' && !allowPaused) throw conflict('The queue is paused. Resume it first.', 'QUEUE_PAUSED');
 }
 
+/** Tokens issued for a day (bookings, same-day and reception), excluding cancelled ones. */
+const issuedFor = (tx: Tx, queueId: string, sessionDate: string) =>
+  tx.queueEntry.count({ where: { queueId, sessionDate, status: { not: 'CANCELLED' } } });
+
+const BLOCK_CODE: Record<JoinBlock, string> = {
+  QUEUE_CLOSED: 'QUEUE_CLOSED',
+  ORG_INACTIVE: 'ORG_INACTIVE',
+  DOCTOR_UNAVAILABLE: 'DOCTOR_UNAVAILABLE',
+  STOPPED_BY_DOCTOR: 'JOINS_STOPPED',
+  FULL: 'QUEUE_FULL',
+  CUTOFF_PASSED: 'CUTOFF_PASSED',
+  SAME_DAY_DISABLED: 'SAME_DAY_DISABLED',
+};
+const joinBlocked = (block: JoinBlock) => conflict(JOIN_BLOCK_MESSAGE[block], BLOCK_CODE[block]);
+
+/** Next token of the current session for a patient; a new NORMAL entry always goes to the back. */
+async function issueToken(tx: Tx, queue: LoadedQueue, patientId: string, source: EntrySource, note?: string) {
+  const { lastTokenNumber: tokenNumber } = await tx.queue.update({
+    where: { id: queue.id },
+    data: { lastTokenNumber: { increment: 1 } },
+    select: { lastTokenNumber: true },
+  });
+  const { waiting, serving } = await orderedWaiting(tx, queue);
+  const ahead = waiting.length;
+  const entry = await tx.queueEntry.create({
+    data: {
+      queueId: queue.id,
+      patientId,
+      sessionDate: queue.sessionDate!,
+      tokenNumber,
+      tokenLabel: formatToken(queue.tokenPrefix, tokenNumber),
+      sortKey: sortKeyForToken(tokenNumber),
+      source,
+      note,
+      approachingNotified: ahead <= queue.approachingThreshold,
+    },
+  });
+  return { entry, ahead, serving };
+}
+
 async function entryInQueue(tx: Tx, queueId: string, entryId: string) {
   const entry = await tx.queueEntry.findUnique({ where: { id: entryId }, include: { patient: { select: { userId: true } } } });
   if (!entry || entry.queueId !== queueId) throw notFound('Queue entry');
@@ -186,9 +236,31 @@ export async function openQueue(queueId: string, actorId: ActorId, opts: { overr
     }
 
     if (!current) {
-      // New day: close out anything left over and restart token numbering.
+      // New day: close out anything left over, then start today's line with the advance bookings
+      // (in token order); on-the-spot patients get the numbers after the last booked token.
       await finalizeSession(tx, queue, fx, actorId, 'Session ended');
-      await tx.queue.update({ where: { id: queue.id }, data: { sessionDate: todayFor(queue), lastTokenNumber: 0 } });
+      const today = todayFor(queue);
+      const booked = await tx.queueEntry.findMany({
+        where: { queueId: queue.id, sessionDate: today, status: 'BOOKED' },
+        include: { patient: { select: { userId: true } } },
+      });
+      if (booked.length) {
+        await tx.queueEntry.updateMany({ where: { id: { in: booked.map((b) => b.id) } }, data: { status: 'WAITING' } });
+        for (const b of booked) {
+          fx.notify({
+            userId: b.patient.userId,
+            type: 'QUEUE_OPENED',
+            title: `Today's queue is open — ${b.tokenLabel}`,
+            body: `${providerLabel(queue)} has started. Follow your position live in QFree.`,
+            data: { queueId: queue.id, entryId: b.id },
+          });
+        }
+      }
+      const { _max } = await tx.queueEntry.aggregate({ where: { queueId: queue.id, sessionDate: today }, _max: { tokenNumber: true } });
+      await tx.queue.update({
+        where: { id: queue.id },
+        data: { sessionDate: today, lastTokenNumber: _max.tokenNumber ?? 0, joinsStopped: false, joinsReopened: false },
+      });
     }
     const wasPaused = current && queue.status === 'PAUSED';
     await tx.queue.update({
@@ -271,38 +343,27 @@ export async function joinQueue(queueId: string, userId: string) {
   try {
     await withQueue(queueId, async (tx, queue, fx) => {
       requireActiveSession(queue, settings.allowJoinWhilePaused);
-      if (!queue.organization.isActive) throw conflict('This organization is currently inactive', 'ORG_INACTIVE');
-      if (queue.doctor && !queue.doctor.isAvailable) throw conflict('The doctor is currently unavailable', 'DOCTOR_UNAVAILABLE');
-
       const existing = await tx.queueEntry.findFirst({
         where: { queueId, patientId: patient.id, status: { in: ['WAITING', 'SERVING'] } },
       });
       if (existing) throw conflict(`You are already in this queue with token ${existing.tokenLabel}`, 'ALREADY_IN_QUEUE');
 
-      const issued = await tx.queueEntry.count({
-        where: { queueId, sessionDate: queue.sessionDate!, status: { not: 'CANCELLED' } },
+      const block = sameDayJoinBlock({
+        status: effectiveStatus(queue),
+        orgActive: queue.organization.isActive,
+        doctorAvailable: queue.doctor ? queue.doctor.isAvailable : true,
+        joinsStopped: queue.joinsStopped,
+        joinsReopened: queue.joinsReopened,
+        capacity: queue.capacity,
+        issued: await issuedFor(tx, queueId, queue.sessionDate!),
+        cutoffTime: queue.joinCutoffTime,
+        localTime: localParts(queue.organization.timezone).time,
+        allowSameDayJoin: queue.allowSameDayJoin,
       });
-      if (issued >= queue.capacity) throw conflict('This queue has reached its capacity for today', 'QUEUE_FULL');
+      if (block) throw joinBlocked(block);
 
-      const { lastTokenNumber: tokenNumber } = await tx.queue.update({
-        where: { id: queueId },
-        data: { lastTokenNumber: { increment: 1 } },
-        select: { lastTokenNumber: true },
-      });
-      const tokenLabel = formatToken(queue.tokenPrefix, tokenNumber);
-      const { waiting, serving } = await orderedWaiting(tx, queue);
-      const ahead = waiting.length; // a new NORMAL entry always goes to the back
-      const entry = await tx.queueEntry.create({
-        data: {
-          queueId,
-          patientId: patient.id,
-          sessionDate: queue.sessionDate!,
-          tokenNumber,
-          tokenLabel,
-          sortKey: sortKeyForToken(tokenNumber),
-          approachingNotified: ahead <= queue.approachingThreshold,
-        },
-      });
+      const { entry, ahead, serving } = await issueToken(tx, queue, patient.id, 'SAME_DAY');
+      const tokenLabel = entry.tokenLabel;
       await recordEvent(tx, queueId, 'JOINED', { entryId: entry.id, actorId: userId });
       const mins = toMinutes(estimateWaitSeconds(ahead, queue.avgServiceSeconds, serving?.calledAt ?? null));
       fx.notify({
@@ -407,8 +468,8 @@ export async function skipEntry(queueId: string, entryId: string, actorId: Actor
     fx.notify({
       userId: entry.patient.userId,
       type: 'SKIPPED',
-      title: `Token ${entry.tokenLabel} was skipped`,
-      body: `You were not present when called by ${providerLabel(queue)}. Please speak to the reception desk to be re-added.`,
+      title: `You missed your turn — ${entry.tokenLabel}`,
+      body: `You were not present when ${providerLabel(queue)} called you. The doctor may call you again after the current queue — please stay nearby or speak to reception.`,
       data: { queueId, entryId },
     });
     await notifyApproaching(tx, queue, fx);
@@ -416,45 +477,30 @@ export async function skipEntry(queueId: string, entryId: string, actorId: Actor
   });
 }
 
-/** Put a skipped patient back in line, a couple of places behind the front (grace positions). */
-export async function requeueEntry(queueId: string, entryId: string, actorId: ActorId) {
-  const { requeueGrace } = await getSettings();
-  try {
-    return await withQueue(queueId, async (tx, queue, fx) => {
-      requireActiveSession(queue, true);
-      const entry = await entryInQueue(tx, queueId, entryId);
-      if (entry.status !== 'SKIPPED') throw conflict('Only skipped patients can be re-queued', 'INVALID_STATE');
-      if (entry.sessionDate !== queue.sessionDate) throw conflict('This entry belongs to an earlier session', 'STALE_ENTRY');
-
-      const { waiting } = await orderedWaiting(tx, queue);
-      let band = waiting.filter((w) => w.priority === entry.priority);
-      let sortKey = requeueSortKey(band, requeueGrace);
-      if (sortKey === null) {
-        for (const r of renumberBand(band)) await tx.queueEntry.update({ where: { id: r.id }, data: { sortKey: r.sortKey } });
-        band = band.map((b, i) => ({ ...b, sortKey: (i + 1) * 1000 }));
-        sortKey = requeueSortKey(band, requeueGrace)!;
-      }
-      await tx.queueEntry.update({
-        where: { id: entry.id },
-        data: { status: 'WAITING', sortKey, approachingNotified: false },
-      });
-      await recordEvent(tx, queueId, 'REQUEUED', { entryId, actorId, meta: { sortKey } });
-      fx.notify({
-        userId: entry.patient.userId,
-        type: 'REQUEUED',
-        title: `Token ${entry.tokenLabel} is back in the queue`,
-        body: `You have been re-added to ${providerLabel(queue)}'s queue. Please stay nearby.`,
-        data: { queueId, entryId },
-      });
-      await notifyApproaching(tx, queue, fx);
-      return { requeued: entry.tokenLabel };
+/**
+ * Call a missed patient. They are not slotted back into the line: the doctor decides when to
+ * recall them, normally once the active queue is done, so waiting patients keep their places.
+ */
+export async function recallEntry(queueId: string, entryId: string, actorId: ActorId) {
+  return withQueue(queueId, async (tx, queue, fx) => {
+    requireActiveSession(queue);
+    const entry = await entryInQueue(tx, queueId, entryId);
+    if (entry.status !== 'SKIPPED') throw conflict('Only patients who missed their turn can be recalled', 'INVALID_STATE');
+    if (entry.sessionDate !== queue.sessionDate) throw conflict('This entry belongs to an earlier session', 'STALE_ENTRY');
+    const { waiting } = await orderedWaiting(tx, queue);
+    const completed = await completeServing(tx, queue, actorId);
+    const now = new Date();
+    await tx.queueEntry.update({ where: { id: entry.id }, data: { status: 'SERVING', calledAt: now, recalledAt: now } });
+    await recordEvent(tx, queueId, 'RECALLED', { entryId, actorId, meta: { stillWaiting: waiting.length } });
+    fx.notify({
+      userId: entry.patient.userId,
+      type: 'RECALLED',
+      title: `You're being called again — ${entry.tokenLabel}`,
+      body: `Please proceed to ${providerLabel(queue)} at ${queue.organization.name} now.`,
+      data: { queueId, entryId },
     });
-  } catch (err) {
-    if ((err as { code?: string }).code === 'P2002') {
-      throw conflict('This patient already has another active entry in this queue', 'ALREADY_IN_QUEUE');
-    }
-    throw err;
-  }
+    return { completed: completed?.tokenLabel ?? null, recalled: entry.tokenLabel, stillWaiting: waiting.length };
+  });
 }
 
 export async function markNoShow(queueId: string, entryId: string, actorId: ActorId) {
@@ -470,8 +516,8 @@ export async function markNoShow(queueId: string, entryId: string, actorId: Acto
 export async function cancelEntry(queueId: string, entryId: string, actorId: ActorId, reason: string) {
   return withQueue(queueId, async (tx, queue, fx) => {
     const entry = await entryInQueue(tx, queueId, entryId);
-    if (entry.status !== 'WAITING' && entry.status !== 'SKIPPED') {
-      throw conflict('Only waiting or skipped patients can be cancelled', 'INVALID_STATE');
+    if (entry.status !== 'WAITING' && entry.status !== 'SKIPPED' && entry.status !== 'BOOKED') {
+      throw conflict('Only booked, waiting or missed patients can be cancelled', 'INVALID_STATE');
     }
     await tx.queueEntry.update({ where: { id: entry.id }, data: { status: 'CANCELLED', cancelledAt: new Date(), note: reason } });
     await recordEvent(tx, queueId, 'CANCELLED', { entryId, actorId, meta: { by: 'staff', reason } });
@@ -514,6 +560,237 @@ export async function setPriority(queueId: string, entryId: string, priority: Pr
     await notifyApproaching(tx, queue, fx);
     return { tokenLabel: entry.tokenLabel, priority };
   });
+}
+
+// ─────────────────────────── Closing controls ───────────────────────────
+
+/**
+ * Manually stop or reopen new patients for today, without closing the queue: patients already in
+ * line are still served. Reopening also lifts today's "stop accepting at" time (not the daily limit).
+ */
+export async function setJoinsOpen(queueId: string, actorId: ActorId, open: boolean) {
+  return withQueue(queueId, async (tx, queue) => {
+    requireActiveSession(queue, true);
+    await tx.queue.update({
+      where: { id: queue.id },
+      data: open ? { joinsStopped: false, joinsReopened: true } : { joinsStopped: true },
+    });
+    await recordEvent(tx, queue.id, open ? 'JOINS_REOPENED' : 'JOINS_STOPPED', { actorId });
+    return { acceptingNewPatients: open };
+  });
+}
+
+// ─────────────────────────── On-the-spot (reception) ───────────────────────────
+
+/**
+ * Add a patient who is physically present (e.g. no smartphone) to today's queue. Reception follows
+ * the doctor's instructions, so the time cutoff and "stop new patients" don't apply, but the daily
+ * limit does unless explicitly overridden (audited). The patient gets a sign-in-less record.
+ */
+export async function addWalkIn(queueId: string, actorId: ActorId, input: { fullName: string; phone?: string; overrideLimit?: boolean }) {
+  return withQueue(queueId, async (tx, queue) => {
+    requireActiveSession(queue, true);
+    const issued = await issuedFor(tx, queue.id, queue.sessionDate!);
+    if (issued >= queue.capacity && !input.overrideLimit) {
+      throw conflict(`Today's limit of ${queue.capacity} patients has been reached. Confirm to add over the limit.`, 'QUEUE_FULL');
+    }
+    const user = await tx.user.create({
+      data: {
+        email: `walkin-${crypto.randomUUID()}@walkin.qfree.local`,
+        fullName: input.fullName,
+        phone: input.phone,
+        role: 'PATIENT',
+        isActive: false, // cannot sign in
+        passwordHash: bcrypt.hashSync(crypto.randomBytes(32).toString('hex'), 4),
+        patient: { create: {} },
+      },
+      include: { patient: true },
+    });
+    const { entry, ahead } = await issueToken(tx, queue, user.patient!.id, 'RECEPTION', 'Added at reception');
+    await recordEvent(tx, queue.id, 'WALK_IN_ADDED', { entryId: entry.id, actorId, meta: { overLimit: issued >= queue.capacity } });
+    if (issued >= queue.capacity) {
+      await audit({ actorId, action: 'queue.walk_in_over_limit', entityType: 'queue', entityId: queue.id, meta: { token: entry.tokenLabel } }, tx);
+    }
+    return { entryId: entry.id, tokenLabel: entry.tokenLabel, patientsAhead: ahead };
+  });
+}
+
+// ─────────────────────────── Advance booking ───────────────────────────
+
+type BookingQueue = Pick<LoadedQueue, 'avgServiceSeconds'> & {
+  organization: Pick<LoadedQueue['organization'], 'hours'>;
+  doctor: { schedules: { dayOfWeek: number; startTime: string; endTime: string }[] } | null;
+};
+
+/** Consultation slots for a date and the estimated time of the Nth patient that day. */
+export function bookingEstimate(queue: BookingQueue, date: string, position: number) {
+  const slots = dayAvailability(weekdayOf(date), queue.organization.hours, queue.doctor?.schedules ?? null);
+  return { slots, estimatedTime: estimatedTimeForPosition(slots, position, queue.avgServiceSeconds) };
+}
+
+export type DayUnavailable = 'NOT_CONSULTING' | 'FULL' | 'NO_TIME_LEFT';
+
+/** Bookable days with remaining places and the estimated time for the next booking. */
+export async function getBookingSlots(queueId: string, userId?: string) {
+  const queue = await loadQueue(prisma, queueId);
+  const today = todayFor(queue);
+  const dates = bookableDates(today, queue.advanceBookingDays);
+  const counts = dates.length
+    ? await prisma.queueEntry.groupBy({
+        by: ['sessionDate', 'source'],
+        where: { queueId, sessionDate: { in: dates }, status: { not: 'CANCELLED' } },
+        _count: true,
+      })
+    : [];
+  const patient = userId ? await prisma.patient.findUnique({ where: { userId }, select: { id: true } }) : null;
+  const mine = patient
+    ? await prisma.queueEntry.findMany({ where: { queueId, patientId: patient.id, status: 'BOOKED', sessionDate: { in: dates } } })
+    : [];
+
+  const days = dates.map((date) => {
+    const issued = counts.filter((c) => c.sessionDate === date).reduce((n, c) => n + c._count, 0);
+    const advance = counts.find((c) => c.sessionDate === date && c.source === 'ADVANCE')?._count ?? 0;
+    const { slots, estimatedTime } = bookingEstimate(queue, date, issued + 1);
+    const byCapacity = queue.capacity - issued;
+    const byQuota = queue.advanceBookingQuota === null ? Infinity : queue.advanceBookingQuota - advance;
+    const remaining = estimatedTime === null ? 0 : Math.max(0, Math.min(byCapacity, byQuota));
+    const unavailable: DayUnavailable | null = !slots.length
+      ? 'NOT_CONSULTING'
+      : Math.min(byCapacity, byQuota) <= 0
+        ? 'FULL'
+        : estimatedTime === null
+          ? 'NO_TIME_LEFT'
+          : null;
+    const my = mine.find((m) => m.sessionDate === date);
+    return {
+      date,
+      dayOfWeek: weekdayOf(date),
+      slots,
+      booked: issued,
+      remaining,
+      nextEstimatedTime: unavailable ? null : estimatedTime,
+      available: !unavailable && queue.organization.isActive,
+      unavailable,
+      myBooking: my ? { entryId: my.id, tokenLabel: my.tokenLabel } : null,
+    };
+  });
+  return {
+    queueId,
+    advanceBookingDays: queue.advanceBookingDays,
+    advanceBookingQuota: queue.advanceBookingQuota,
+    capacity: queue.capacity,
+    timezone: queue.organization.timezone,
+    days,
+  };
+}
+
+/** Reserve a numbered place in a future day's queue. Tokens for that day are numbered in booking order. */
+export async function bookAppointment(queueId: string, userId: string, date: string) {
+  const patient = await prisma.patient.findUnique({ where: { userId }, select: { id: true } });
+  if (!patient) throw forbidden('Only patient accounts can book appointments');
+  const settings = await getSettings();
+  const upcoming = await prisma.queueEntry.count({ where: { patientId: patient.id, status: 'BOOKED' } });
+  if (upcoming >= settings.maxUpcomingBookingsPerPatient) {
+    throw conflict(`You can hold at most ${settings.maxUpcomingBookingsPerPatient} upcoming bookings`, 'TOO_MANY_BOOKINGS');
+  }
+
+  try {
+    return await withQueue(queueId, async (tx, queue, fx) => {
+      if (!queue.organization.isActive) throw conflict('This provider is not accepting bookings right now', 'ORG_INACTIVE');
+      if (queue.advanceBookingDays <= 0) throw conflict('Advance booking is not available for this queue', 'BOOKING_DISABLED');
+      const window = bookableDates(todayFor(queue), queue.advanceBookingDays);
+      if (!window.includes(date)) {
+        throw conflict(`Appointments can be booked from ${window[0]} to ${window[window.length - 1]}`, 'OUTSIDE_BOOKING_WINDOW');
+      }
+      const already = await tx.queueEntry.findFirst({ where: { queueId, patientId: patient.id, sessionDate: date, status: 'BOOKED' } });
+      if (already) throw conflict(`You already have token ${already.tokenLabel} for this day`, 'ALREADY_BOOKED');
+
+      const issued = await issuedFor(tx, queueId, date);
+      const { slots, estimatedTime } = bookingEstimate(queue, date, issued + 1);
+      if (!slots.length) throw conflict('The doctor is not consulting on this day', 'NOT_CONSULTING');
+      if (issued >= queue.capacity || estimatedTime === null) throw conflict('This day is fully booked', 'DAY_FULL');
+      if (queue.advanceBookingQuota !== null) {
+        const advance = await tx.queueEntry.count({ where: { queueId, sessionDate: date, source: 'ADVANCE', status: { not: 'CANCELLED' } } });
+        if (advance >= queue.advanceBookingQuota) {
+          throw conflict('All advance places for this day are taken. On-the-spot places may still be available on the day.', 'DAY_FULL');
+        }
+      }
+
+      const { _max } = await tx.queueEntry.aggregate({ where: { queueId, sessionDate: date }, _max: { tokenNumber: true } });
+      const tokenNumber = (_max.tokenNumber ?? 0) + 1;
+      const entry = await tx.queueEntry.create({
+        data: {
+          queueId,
+          patientId: patient.id,
+          sessionDate: date,
+          tokenNumber,
+          tokenLabel: formatToken(queue.tokenPrefix, tokenNumber),
+          sortKey: sortKeyForToken(tokenNumber),
+          status: 'BOOKED',
+          source: 'ADVANCE',
+        },
+      });
+      await recordEvent(tx, queueId, 'BOOKED', { entryId: entry.id, actorId: userId, meta: { date, estimatedTime } });
+      fx.notify({
+        userId,
+        type: 'BOOKED',
+        title: `Appointment booked — ${entry.tokenLabel}`,
+        body: `${providerLabel(queue)} on ${date}, estimated around ${estimatedTime}. Arrive a little early; you'll be notified when the queue opens.`,
+        data: { queueId, entryId: entry.id },
+      });
+      return { entryId: entry.id, tokenLabel: entry.tokenLabel, date, position: issued + 1, estimatedTime };
+    });
+  } catch (err) {
+    if ((err as { code?: string }).code === 'P2002') throw conflict('You already have a booking for this day', 'ALREADY_BOOKED');
+    throw err;
+  }
+}
+
+export async function cancelBooking(queueId: string, userId: string, entryId: string) {
+  return withQueue(queueId, async (tx, queue, fx) => {
+    const entry = await entryInQueue(tx, queueId, entryId);
+    if (entry.patient.userId !== userId) throw notFound('Booking');
+    if (entry.status !== 'BOOKED') throw conflict('Only upcoming bookings can be cancelled here', 'INVALID_STATE');
+    await tx.queueEntry.update({ where: { id: entry.id }, data: { status: 'CANCELLED', cancelledAt: new Date(), note: 'Booking cancelled by patient' } });
+    await recordEvent(tx, queueId, 'CANCELLED', { entryId, actorId: userId, meta: { by: 'patient', booking: true } });
+    fx.notify({
+      userId,
+      type: 'BOOKING_CANCELLED',
+      title: `Booking cancelled — ${entry.tokenLabel}`,
+      body: `Your appointment with ${providerLabel(queue)} on ${entry.sessionDate} has been cancelled.`,
+      data: { queueId, entryId },
+    });
+    return { cancelled: entry.tokenLabel };
+  });
+}
+
+/** Cancel bookings for days whose session never opened (run with housekeeping). */
+export async function expireStaleBookings() {
+  const utcTomorrow = new Date(Date.now() + 86_400_000).toISOString().slice(0, 10);
+  const candidates = await prisma.queueEntry.findMany({
+    where: { status: 'BOOKED', sessionDate: { lt: utcTomorrow } },
+    select: { id: true, queueId: true, sessionDate: true, queue: { select: { organization: { select: { timezone: true } } } } },
+  });
+  const stale = candidates.filter((c) => c.sessionDate < todayFor(c.queue));
+  const byQueue = new Map<string, string[]>();
+  for (const s of stale) byQueue.set(s.queueId, [...(byQueue.get(s.queueId) ?? []), s.id]);
+  for (const [queueId, ids] of byQueue) {
+    await withQueue(queueId, async (tx, queue, fx) => {
+      const entries = await tx.queueEntry.findMany({ where: { id: { in: ids }, status: 'BOOKED' }, include: { patient: { select: { userId: true } } } });
+      for (const e of entries) {
+        await tx.queueEntry.update({ where: { id: e.id }, data: { status: 'CANCELLED', cancelledAt: new Date(), note: 'Session did not take place' } });
+        await recordEvent(tx, queueId, 'CANCELLED', { entryId: e.id, meta: { reason: 'session did not take place' } });
+        fx.notify({
+          userId: e.patient.userId,
+          type: 'BOOKING_CANCELLED',
+          title: `Booking ${e.tokenLabel} expired`,
+          body: `${providerLabel(queue)}'s queue did not open on ${e.sessionDate}. Please book another day.`,
+          data: { queueId, entryId: e.id },
+        });
+      }
+    });
+  }
+  return stale.length;
 }
 
 /** Close queues whose session day has passed (run periodically and on startup). */

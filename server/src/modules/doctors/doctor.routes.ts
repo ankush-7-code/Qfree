@@ -6,6 +6,8 @@ import { hhmm, idParams, paged, pagination, parse } from '../../lib/validate.js'
 import { auditFrom } from '../../lib/audit.js';
 import { authenticate, currentUser, requireRole } from '../../middleware/auth.js';
 import { getSnapshot } from '../queues/queue.state.js';
+import { addDays, dayAvailability, weekdayOf } from '../queues/queue.logic.js';
+import { localParts } from '../../lib/time.js';
 import { publishQueue } from '../../realtime/publish.js';
 
 export const doctorRouter = Router();
@@ -153,6 +155,47 @@ doctorRouter.get('/:id', async (req, res) => {
     },
   });
   if (!d) throw notFound('Doctor');
+  const clinic = d.organization
+    ? await prisma.organization.findUnique({
+        where: { id: d.organization.id },
+        select: { phone: true, timezone: true, hours: { select: { dayOfWeek: true, openTime: true, closeTime: true, isClosed: true } } },
+      })
+    : null;
   const { queues, ...rest } = d;
-  res.json({ ...flatten(rest), queues: await Promise.all(queues.map((q) => getSnapshot(q.id))) });
+  res.json({
+    ...flatten(rest),
+    organization: d.organization && clinic ? { ...d.organization, phone: clinic.phone, timezone: clinic.timezone } : null,
+    availability: doctorAvailability(d.schedules, clinic?.hours ?? null, clinic?.timezone ?? 'Asia/Kolkata'),
+    queues: await Promise.all(queues.map((q) => getSnapshot(q.id))),
+  });
 });
+
+const ALL_DAY = [0, 1, 2, 3, 4, 5, 6].map((dayOfWeek) => ({ dayOfWeek, openTime: '00:00', closeTime: '23:59', isClosed: false }));
+
+/**
+ * When the doctor consults, in the clinic's local time: their published timings within the clinic's
+ * opening days (same rules as booking), whether they are consulting right now, and the next day they consult.
+ */
+function doctorAvailability(
+  schedules: { dayOfWeek: number; startTime: string; endTime: string }[],
+  orgHours: { dayOfWeek: number; openTime: string; closeTime: string; isClosed: boolean }[] | null,
+  timezone: string,
+) {
+  const hours = orgHours ?? ALL_DAY;
+  const { date: today, time: now } = localParts(timezone);
+  const todaySlots = dayAvailability(weekdayOf(today), hours, schedules);
+  let next: { date: string; slots: { start: string; end: string }[] } | null = null;
+  for (let i = 0; i <= 14 && !next; i++) {
+    const date = addDays(today, i);
+    const slots = dayAvailability(weekdayOf(date), hours, schedules).filter((s) => i > 0 || s.end > now);
+    if (slots.length) next = { date, slots };
+  }
+  return {
+    timezone,
+    today,
+    todaySlots,
+    consultingNow: todaySlots.some((s) => s.start <= now && now < s.end),
+    next,
+    weekly: [0, 1, 2, 3, 4, 5, 6].map((day) => ({ dayOfWeek: day, slots: dayAvailability(day, hours, schedules) })),
+  };
+}

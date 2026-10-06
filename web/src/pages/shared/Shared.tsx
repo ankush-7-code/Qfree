@@ -174,7 +174,7 @@ interface EntryDetailData {
   joinedAt: string;
   calledAt: string | null;
   completedAt: string | null;
-  patient: { name: string; phone: string | null; email: string; dateOfBirth: string | null; gender: string | null };
+  patient: { name: string; phone: string | null; email: string | null; addedAtReception: boolean; dateOfBirth: string | null; gender: string | null };
   timeline: { type: string; at: string; by: string; meta: Record<string, unknown> | null }[];
   previousVisits: { id: string; tokenLabel: string; completedAt: string | null; queue: { name: string } }[];
 }
@@ -220,7 +220,7 @@ export function EntryDetails() {
             <dt className="text-ink-2">Phone</dt>
             <dd>{data.patient.phone ? <a className="text-brand hover:underline" href={`tel:${data.patient.phone.replace(/\s/g, '')}`}>{data.patient.phone}</a> : '—'}</dd>
             <dt className="text-ink-2">Email</dt>
-            <dd className="break-all">{data.patient.email}</dd>
+            <dd className="break-all">{data.patient.email ?? (data.patient.addedAtReception ? 'Added at reception (no account)' : '—')}</dd>
             {data.note && (
               <>
                 <dt className="text-ink-2">Note</dt>

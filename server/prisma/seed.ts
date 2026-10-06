@@ -14,6 +14,7 @@ import { prisma } from '../src/lib/prisma.js';
 import { localDate } from '../src/lib/time.js';
 import { doctorSchedule, PASSWORD, pick, rand, seedLiveSession, simulateHistory, TZ, week } from './demo-lib.js';
 import { addRegionalDemo, addRegionalDemoToExisting } from './demo-regions.js';
+import { applyDemoUpgrades } from './demo-upgrades.js';
 
 const FIRST = ['Aarav', 'Vivaan', 'Aditya', 'Ananya', 'Diya', 'Ishaan', 'Kavya', 'Rohan', 'Saanvi', 'Arjun', 'Meera', 'Kabir', 'Priya', 'Rahul', 'Sneha', 'Vikram', 'Neha', 'Aditi', 'Karan', 'Pooja'];
 const LAST = ['Verma', 'Gupta', 'Singh', 'Patel', 'Reddy', 'Nair', 'Joshi', 'Das', 'Kapoor', 'Menon', 'Rao', 'Bose', 'Chopra', 'Pillai'];
@@ -37,7 +38,9 @@ async function main() {
   if (existing > 0) {
     if (auto) {
       const added = await addRegionalDemoToExisting(await bcrypt.hash(PASSWORD, 10));
-      console.log(added.length ? `Demo: added ${added.join(', ')}` : 'Demo seed skipped: database already has data.');
+      const upgrades = await applyDemoUpgrades();
+      const changes = [...added.map((a) => `added ${a}`), ...upgrades];
+      console.log(changes.length ? `Demo: ${changes.join('; ')}` : 'Demo seed skipped: database already has data.');
       return;
     }
     if (!process.argv.includes('--reset')) {
@@ -200,7 +203,8 @@ async function main() {
     ],
   });
 
-  await prisma.auditLog.create({ data: { actorId: admin.id, action: 'system.seed', entityType: 'system', meta: { entries: historyCount + liveCount, regions } } });
+  const upgrades = await applyDemoUpgrades();
+  await prisma.auditLog.create({ data: { actorId: admin.id, action: 'system.seed', entityType: 'system', meta: { entries: historyCount + liveCount, regions, upgrades } } });
 
   console.log(`Seeded Mumbai/Pune (${historyCount + liveCount} entries) and ${regions.length} regional providers.`);
   console.log(`Demo password: ${PASSWORD}${adminPassword ? ' (admin uses DEMO_ADMIN_PASSWORD)' : ' for every account'}`);

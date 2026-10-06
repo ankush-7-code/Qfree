@@ -2,7 +2,7 @@ import { Router } from 'express';
 import { z } from 'zod';
 import { prisma } from '../../lib/prisma.js';
 import { badRequest, conflict, forbidden, notFound } from '../../lib/errors.js';
-import { idParams, paged, pagination, parse, uuid } from '../../lib/validate.js';
+import { hhmm, idParams, paged, pagination, parse, uuid } from '../../lib/validate.js';
 import { auditFrom } from '../../lib/audit.js';
 import { authenticate, currentUser, optionalAuth, requireRole } from '../../middleware/auth.js';
 import { joinLimiter } from '../../middleware/rateLimit.js';
@@ -16,21 +16,46 @@ export const queueRouter = Router();
 const entryParams = z.object({ id: uuid, entryId: uuid });
 const qid = (req: { params: unknown }) => parse(idParams, req.params).id;
 
-const queueBody = z.object({
-  organizationId: uuid,
-  doctorId: uuid.optional().nullable(),
-  serviceId: uuid.optional().nullable(),
+// Field rules without defaults: updates must only touch the fields that were sent
+// (Zod applies `.default()` even inside `.partial()`).
+const queueFields = {
+  doctorId: uuid.nullable(),
+  serviceId: uuid.nullable(),
   name: z.string().trim().min(2).max(100),
   tokenPrefix: z
     .string()
     .trim()
     .toUpperCase()
-    .regex(/^[A-Z]{1,4}$/, 'Prefix must be 1–4 letters')
-    .default('QF'),
-  capacity: z.coerce.number().int().min(1).max(5000).default(100),
-  avgServiceMinutes: z.coerce.number().min(1).max(60).default(10),
-  approachingThreshold: z.coerce.number().int().min(1).max(20).default(3),
+    .regex(/^[A-Z]{1,4}$/, 'Prefix must be 1–4 letters'),
+  // Closing rules: `capacity` is the daily patient limit; `joinCutoffTime` stops new patients at a
+  // local time. With both set, whichever is reached first closes new joins.
+  capacity: z.coerce.number().int().min(1).max(5000),
+  joinCutoffTime: hhmm.nullable(),
+  avgServiceMinutes: z.coerce.number().min(1).max(60),
+  approachingThreshold: z.coerce.number().int().min(1).max(20),
+  allowSameDayJoin: z.boolean(),
+  advanceBookingDays: z.coerce.number().int().min(0).max(60),
+  advanceBookingQuota: z.coerce.number().int().min(1).max(5000).nullable(),
+};
+
+const createQueueBody = z.object({
+  ...queueFields,
+  organizationId: uuid,
+  doctorId: queueFields.doctorId.optional(),
+  serviceId: queueFields.serviceId.optional(),
+  tokenPrefix: queueFields.tokenPrefix.default('QF'),
+  capacity: queueFields.capacity.default(100),
+  joinCutoffTime: queueFields.joinCutoffTime.optional(),
+  avgServiceMinutes: queueFields.avgServiceMinutes.default(10),
+  approachingThreshold: queueFields.approachingThreshold.default(3),
+  allowSameDayJoin: queueFields.allowSameDayJoin.default(true),
+  advanceBookingDays: queueFields.advanceBookingDays.default(0),
+  advanceBookingQuota: queueFields.advanceBookingQuota.optional(),
 });
+
+const updateQueueBody = z.object(queueFields).partial();
+
+const isoDate = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Date must be YYYY-MM-DD');
 
 // ─────────────── Public reads ───────────────
 
@@ -79,6 +104,25 @@ queueRouter.post('/:id/join', authenticate, requireRole('PATIENT'), joinLimiter,
 queueRouter.delete('/:id/leave', authenticate, requireRole('PATIENT'), async (req, res) => {
   const { id } = parse(idParams, req.params);
   res.json(await svc.leaveQueue(id, currentUser(req).id));
+});
+
+// ─────────────── Advance booking ───────────────
+
+/** Bookable days with remaining places and estimated times (plus the caller's bookings when signed in). */
+queueRouter.get('/:id/booking-slots', optionalAuth, async (req, res) => {
+  const { id } = parse(idParams, req.params);
+  res.json(await svc.getBookingSlots(id, req.user?.role === 'PATIENT' ? req.user.id : undefined));
+});
+
+queueRouter.post('/:id/bookings', authenticate, requireRole('PATIENT'), joinLimiter, async (req, res) => {
+  const { id } = parse(idParams, req.params);
+  const { date } = parse(z.object({ date: isoDate }), req.body);
+  res.status(201).json(await svc.bookAppointment(id, currentUser(req).id, date));
+});
+
+queueRouter.delete('/:id/bookings/:entryId', authenticate, requireRole('PATIENT'), async (req, res) => {
+  const { id, entryId } = parse(entryParams, req.params);
+  res.json(await svc.cancelBooking(id, currentUser(req).id, entryId));
 });
 
 // ─────────────── Queue management (doctor / staff / admin) ───────────────
@@ -156,7 +200,9 @@ manage.get('/entries/:entryId', async (req, res) => {
     patient: {
       name: entry.patient.user.fullName,
       phone: entry.patient.user.phone,
-      email: entry.patient.user.email,
+      // Patients added at reception have an internal placeholder address, not a real email.
+      email: entry.patient.user.email.endsWith('@walkin.qfree.local') ? null : entry.patient.user.email,
+      addedAtReception: entry.source === 'RECEPTION',
       dateOfBirth: entry.patient.dateOfBirth,
       gender: entry.patient.gender,
     },
@@ -176,9 +222,52 @@ manage.post('/entries/:entryId/skip', async (req, res) => {
   res.json(await svc.skipEntry(id, entryId, currentUser(req).id, reason));
 });
 
-manage.post('/entries/:entryId/requeue', async (req, res) => {
+/** Call a patient who missed their turn (the doctor decides when, normally after the active queue). */
+manage.post('/entries/:entryId/recall', async (req, res) => {
   const { id, entryId } = parse(entryParams, req.params);
-  res.json(await svc.requeueEntry(id, entryId, currentUser(req).id));
+  res.json(await svc.recallEntry(id, entryId, currentUser(req).id));
+});
+
+/** On-the-spot patient added by doctor or reception. */
+manage.post('/walk-ins', async (req, res) => {
+  const body = parse(
+    z.object({
+      fullName: z.string().trim().min(2).max(100),
+      phone: z.string().trim().regex(/^\+?[0-9 ()-]{7,20}$/, 'Invalid phone number').optional(),
+      overrideLimit: z.boolean().optional(),
+    }),
+    req.body,
+  );
+  const result = await svc.addWalkIn(qid(req), currentUser(req).id, body);
+  await auditFrom(req, { action: 'queue.walk_in_added', entityType: 'queue', entityId: qid(req), meta: { token: result.tokenLabel } });
+  res.status(201).json(result);
+});
+
+/** Stop / reopen new patients for today without closing the queue. */
+manage.post('/joins/stop', async (req, res) => {
+  res.json(await svc.setJoinsOpen(qid(req), currentUser(req).id, false));
+});
+
+manage.post('/joins/reopen', async (req, res) => {
+  res.json(await svc.setJoinsOpen(qid(req), currentUser(req).id, true));
+});
+
+/** Upcoming advance bookings, grouped by day. */
+manage.get('/bookings', async (req, res) => {
+  const id = qid(req);
+  const rows = await prisma.queueEntry.findMany({
+    where: { queueId: id, status: 'BOOKED' },
+    orderBy: [{ sessionDate: 'asc' }, { tokenNumber: 'asc' }],
+    take: 500,
+    select: { id: true, tokenLabel: true, tokenNumber: true, sessionDate: true, joinedAt: true, patient: { select: { user: { select: { fullName: true, phone: true } } } } },
+  });
+  const days = new Map<string, { date: string; bookings: { id: string; tokenLabel: string; bookedAt: Date; patient: { name: string; phone: string | null } }[] }>();
+  for (const r of rows) {
+    const day = days.get(r.sessionDate) ?? { date: r.sessionDate, bookings: [] };
+    day.bookings.push({ id: r.id, tokenLabel: r.tokenLabel, bookedAt: r.joinedAt, patient: { name: r.patient.user.fullName, phone: r.patient.user.phone } });
+    days.set(r.sessionDate, day);
+  }
+  res.json({ days: [...days.values()] });
 });
 
 manage.post('/entries/:entryId/no-show', async (req, res) => {
@@ -263,7 +352,7 @@ async function assertProvidersBelong(organizationId: string, doctorId?: string |
 
 queueRouter.post('/', authenticate, requireRole('DOCTOR', 'ORG_ADMIN', 'ADMIN'), async (req, res) => {
   const user = currentUser(req);
-  const body = parse(queueBody, req.body);
+  const body = parse(createQueueBody, req.body);
   if (!body.doctorId && !body.serviceId) throw badRequest('A queue must serve a doctor or a service');
   await assertCanConfigure(user.id, user.role, body.organizationId, body.doctorId);
   await assertProvidersBelong(body.organizationId, body.doctorId, body.serviceId);
@@ -275,8 +364,12 @@ queueRouter.post('/', authenticate, requireRole('DOCTOR', 'ORG_ADMIN', 'ADMIN'),
       name: body.name,
       tokenPrefix: body.tokenPrefix,
       capacity: body.capacity,
+      joinCutoffTime: body.joinCutoffTime ?? null,
       avgServiceSeconds: Math.round(body.avgServiceMinutes * 60),
       approachingThreshold: body.approachingThreshold,
+      allowSameDayJoin: body.allowSameDayJoin,
+      advanceBookingDays: body.advanceBookingDays,
+      advanceBookingQuota: body.advanceBookingQuota ?? null,
     },
   });
   await auditFrom(req, { action: 'queue.create', entityType: 'queue', entityId: queue.id });
@@ -288,19 +381,15 @@ queueRouter.patch('/:id', authenticate, async (req, res) => {
   const { id } = parse(idParams, req.params);
   const existing = await prisma.queue.findUnique({ where: { id } });
   if (!existing || existing.isArchived) throw notFound('Queue');
-  const body = parse(queueBody.omit({ organizationId: true }).partial(), req.body);
+  const body = parse(updateQueueBody, req.body);
   await assertCanConfigure(user.id, user.role, existing.organizationId, existing.doctorId);
   await assertProvidersBelong(existing.organizationId, body.doctorId, body.serviceId);
+  const { avgServiceMinutes, ...fields } = body;
   await prisma.queue.update({
     where: { id },
     data: {
-      name: body.name,
-      tokenPrefix: body.tokenPrefix,
-      capacity: body.capacity,
-      approachingThreshold: body.approachingThreshold,
-      doctorId: body.doctorId,
-      serviceId: body.serviceId,
-      ...(body.avgServiceMinutes ? { avgServiceSeconds: Math.round(body.avgServiceMinutes * 60) } : {}),
+      ...fields,
+      ...(avgServiceMinutes ? { avgServiceSeconds: Math.round(avgServiceMinutes * 60) } : {}),
     },
   });
   await auditFrom(req, { action: 'queue.update', entityType: 'queue', entityId: id, meta: body });

@@ -6,6 +6,7 @@ import { idParams, paged, pagination, parse } from '../../lib/validate.js';
 import { auditFrom } from '../../lib/audit.js';
 import { authenticate, currentUser, requireRole } from '../../middleware/auth.js';
 import { getMyEntry } from '../queues/queue.state.js';
+import { bookingEstimate } from '../queues/queue.service.js';
 
 export const patientRouter = Router();
 patientRouter.use(authenticate);
@@ -113,6 +114,53 @@ async function history(patientId: string, page: number, pageSize: number) {
     pageSize,
   );
 }
+
+/** Upcoming advance bookings with the estimated consultation time. */
+patientRouter.get('/me/bookings', requireRole('PATIENT'), async (req, res) => {
+  const p = await patientFor(currentUser(req).id);
+  const bookings = await prisma.queueEntry.findMany({
+    where: { patientId: p.id, status: 'BOOKED' },
+    orderBy: [{ sessionDate: 'asc' }, { tokenNumber: 'asc' }],
+    include: {
+      queue: {
+        select: {
+          id: true,
+          name: true,
+          avgServiceSeconds: true,
+          organization: { select: { id: true, name: true, address: true, city: true, hours: true } },
+          doctor: { select: { id: true, specialization: true, user: { select: { fullName: true } }, schedules: true } },
+          service: { select: { name: true } },
+        },
+      },
+    },
+  });
+  const items = await Promise.all(
+    bookings.map(async (b) => {
+      // Position in that day's line = tokens before this one that are still valid, plus one.
+      const before = await prisma.queueEntry.count({
+        where: { queueId: b.queueId, sessionDate: b.sessionDate, tokenNumber: { lt: b.tokenNumber }, status: { not: 'CANCELLED' } },
+      });
+      const { estimatedTime } = bookingEstimate(b.queue, b.sessionDate, before + 1);
+      const { organization, doctor } = b.queue;
+      return {
+        entryId: b.id,
+        tokenLabel: b.tokenLabel,
+        date: b.sessionDate,
+        position: before + 1,
+        estimatedTime,
+        bookedAt: b.joinedAt,
+        queue: {
+          id: b.queue.id,
+          name: b.queue.name,
+          service: b.queue.service,
+          organization: { id: organization.id, name: organization.name, address: organization.address, city: organization.city },
+          doctor: doctor ? { id: doctor.id, name: doctor.user.fullName, specialization: doctor.specialization } : null,
+        },
+      };
+    }),
+  );
+  res.json({ items });
+});
 
 patientRouter.get('/me/history', requireRole('PATIENT'), async (req, res) => {
   const q = parse(pagination, req.query);

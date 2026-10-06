@@ -1,13 +1,13 @@
-import { useParams } from 'react-router';
+import { Link, useParams } from 'react-router';
 import { useQuery } from '@tanstack/react-query';
-import { BadgeCheck, Clock, GraduationCap, Mail, MapPin, Phone } from 'lucide-react';
+import { BadgeCheck, CalendarDays, Clock, GraduationCap, Mail, MapPin, Navigation, Phone, Ticket } from 'lucide-react';
 import { api } from '../../lib/api';
-import type { DoctorSummary, Hours, OrgDetails, QueueSnapshot } from '../../lib/types';
-import { categoryLabel, DAYS, initials, orgTypeLabel } from '../../lib/format';
+import type { DoctorAvailability, DoctorSummary, Hours, OrgDetails, OrgType, QueueSnapshot } from '../../lib/types';
+import { categoryLabel, clock, DAYS, dayLabel, initials, orgTypeLabel, slotsLabel } from '../../lib/format';
 import { useLiveSnapshots } from '../../hooks/useLive';
 import { Badge, Card, CardTitle, EmptyState, ErrorState, Spinner } from '../../components/ui/primitives';
 import { QueueTile } from '../../components/queue/QueueTile';
-import { Link } from 'react-router';
+import { buttonClass, LinkButton } from '../../components/ui/Button';
 
 function HoursTable({ hours }: { hours: Hours[] }) {
   const today = new Date().getDay();
@@ -133,15 +133,35 @@ export function ProviderDetails() {
   );
 }
 
-type DoctorDetail = DoctorSummary & { schedules: { dayOfWeek: number; startTime: string; endTime: string }[]; queues: QueueSnapshot[] };
+type DoctorDetail = Omit<DoctorSummary, 'organization'> & {
+  schedules: { dayOfWeek: number; startTime: string; endTime: string }[];
+  organization: { id: string; name: string; type: OrgType; city: string; address: string; phone: string | null; timezone: string } | null;
+  availability: DoctorAvailability;
+  queues: QueueSnapshot[];
+};
+
+/** One-line answer to "when can I see this doctor?" */
+function AvailabilityChip({ d }: { d: DoctorDetail }) {
+  const a = d.availability;
+  if (!d.isAvailable) return <Badge tone="paused">Not available today</Badge>;
+  if (a.consultingNow) return <Badge tone="active">Consulting now</Badge>;
+  if (a.next?.date === a.today) return <Badge tone="approach">Today {slotsLabel(a.next.slots)}</Badge>;
+  if (a.next) return <Badge tone="neutral">Next available {dayLabel(a.next.date)}, {clock(a.next.slots[0].start)}</Badge>;
+  return <Badge tone="neutral">No consultation hours in the next two weeks</Badge>;
+}
+
+const mapsUrl = (o: { name: string; address: string; city: string }) =>
+  `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(`${o.name}, ${o.address}, ${o.city}`)}`;
 
 export function DoctorDetails() {
   const { id } = useParams();
   const key = ['doctor', id] as const;
   const { data: d, isLoading, error, refetch } = useQuery({ queryKey: key, queryFn: () => api.get<DoctorDetail>(`/doctors/${id}`) });
+  useLiveSnapshots(key, d?.queues.map((q) => q.id) ?? []);
 
   if (isLoading) return <Spinner />;
   if (error || !d) return <ErrorState error={error} retry={refetch} />;
+  const todayDow = new Date(`${d.availability.today}T12:00:00`).getDay();
 
   return (
     <div className="mx-auto max-w-5xl px-4 py-8">
@@ -159,19 +179,41 @@ export function DoctorDetails() {
               </span>
             )}
             {d.experienceYears > 0 && <span>{d.experienceYears} years experience</span>}
-            {d.organization && (
-              <Link to={`/providers/${d.organization.id}`} className="flex items-center gap-1.5 text-brand hover:underline">
-                <MapPin className="size-4" aria-hidden /> {d.organization.name}
-              </Link>
-            )}
+          </div>
+          <div className="mt-2">
+            <AvailabilityChip d={d} />
           </div>
         </div>
       </header>
-      <div className="grid gap-5 lg:grid-cols-[2fr_1fr]">
+
+      <div className="grid gap-5 lg:grid-cols-[3fr_2fr]">
         <div className="flex flex-col gap-5">
           <Card>
-            <CardTitle>Live queue</CardTitle>
-            <LiveQueues queues={d.queues} cacheKey={key} />
+            <CardTitle>Queue & appointments</CardTitle>
+            {d.queues.length === 0 ? (
+              <EmptyState title="No queue yet">This doctor has not set up a digital queue.</EmptyState>
+            ) : (
+              <div className="flex flex-col gap-4">
+                {d.queues.map((q) => (
+                  <div key={q.id} className="flex flex-col gap-2">
+                    <QueueTile q={q} />
+                    <div className="flex flex-wrap gap-2">
+                      {q.isAcceptingPatients && (
+                        <LinkButton to={`/queues/${q.id}`} icon={<Ticket className="size-5" />}>
+                          Join today's queue
+                        </LinkButton>
+                      )}
+                      {q.advanceBookingDays > 0 && (
+                        <LinkButton to={`/queues/${q.id}#book`} variant={q.isAcceptingPatients ? 'secondary' : 'primary'} icon={<CalendarDays className="size-5" />}>
+                          Book a later day
+                        </LinkButton>
+                      )}
+                    </div>
+                    {!q.isAcceptingPatients && q.joinBlockMessage && <p className="text-sm text-ink-2">Today: {q.joinBlockMessage}</p>}
+                  </div>
+                ))}
+              </div>
+            )}
           </Card>
           {d.bio && (
             <Card>
@@ -180,22 +222,55 @@ export function DoctorDetails() {
             </Card>
           )}
         </div>
+
         <Card className="h-fit">
-          <CardTitle>Consultation timings</CardTitle>
-          {d.schedules.length === 0 ? (
-            <p className="text-ink-2">Timings not published.</p>
+          <CardTitle>
+            <span className="flex items-center gap-2">
+              <Clock className="size-5" aria-hidden /> When & where
+            </span>
+          </CardTitle>
+          <ul className="flex flex-col divide-y divide-line" aria-label="Consultation days and timings">
+            {d.availability.weekly.map(({ dayOfWeek, slots }) => (
+              <li key={dayOfWeek} className={`flex justify-between gap-3 py-2 ${dayOfWeek === todayDow ? 'font-semibold' : ''}`}>
+                <span>
+                  {DAYS[dayOfWeek]}
+                  {dayOfWeek === todayDow && <span className="ml-1 text-sm font-normal text-muted">(today)</span>}
+                </span>
+                <span className={`tabular flex flex-col text-right ${slots.length ? 'text-ink-2' : 'text-muted'}`}>
+                  {slots.length ? slots.map((s) => <span key={s.start} className="whitespace-nowrap">{slotsLabel([s])}</span>) : 'Not available'}
+                </span>
+              </li>
+            ))}
+          </ul>
+          {d.schedules.length === 0 && <p className="mt-2 text-sm text-muted">Based on the clinic's opening hours.</p>}
+
+          {d.organization ? (
+            <div className="mt-5 border-t border-line pt-4">
+              <p className="flex items-start gap-2">
+                <MapPin className="mt-1 size-4 shrink-0 text-brand" aria-hidden />
+                <span>
+                  <Link to={`/providers/${d.organization.id}`} className="font-semibold hover:text-brand hover:underline">
+                    {d.organization.name}
+                  </Link>
+                  <span className="block text-ink-2">
+                    {d.organization.address}, {d.organization.city}
+                  </span>
+                </span>
+              </p>
+              <div className="mt-3 flex flex-wrap gap-2">
+                <a href={mapsUrl(d.organization)} target="_blank" rel="noopener noreferrer" className={buttonClass('secondary', 'sm')}>
+                  <Navigation className="size-4" aria-hidden /> Open in Maps
+                </a>
+                {d.organization.phone && (
+                  <a href={`tel:${d.organization.phone.replace(/\s/g, '')}`} className={buttonClass('secondary', 'sm')}>
+                    <Phone className="size-4" aria-hidden /> {d.organization.phone}
+                  </a>
+                )}
+              </div>
+              <p className="mt-3 text-sm text-muted">Times shown in {d.availability.timezone}.</p>
+            </div>
           ) : (
-            <ul className="flex flex-col divide-y divide-line">
-              {DAYS.map((day, i) => {
-                const slots = d.schedules.filter((s) => s.dayOfWeek === i);
-                return (
-                  <li key={day} className="flex justify-between gap-3 py-2">
-                    <span>{day}</span>
-                    <span className="tabular text-right text-ink-2">{slots.length ? slots.map((s) => `${s.startTime}–${s.endTime}`).join(', ') : 'Not available'}</span>
-                  </li>
-                );
-              })}
-            </ul>
+            <p className="mt-4 text-ink-2">This doctor has not added a clinic location yet.</p>
           )}
         </Card>
       </div>

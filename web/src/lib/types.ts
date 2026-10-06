@@ -1,10 +1,12 @@
 export type Role = 'PATIENT' | 'DOCTOR' | 'ORG_ADMIN' | 'ADMIN';
 export type OrgType = 'CLINIC' | 'LABORATORY' | 'HOSPITAL' | 'DIAGNOSTIC_CENTER';
 export type QueueStatus = 'OPEN' | 'PAUSED' | 'CLOSED';
-export type EntryStatus = 'WAITING' | 'SERVING' | 'COMPLETED' | 'SKIPPED' | 'CANCELLED' | 'NO_SHOW';
+export type EntryStatus = 'BOOKED' | 'WAITING' | 'SERVING' | 'COMPLETED' | 'SKIPPED' | 'CANCELLED' | 'NO_SHOW';
 export type Priority = 'NORMAL' | 'PRIORITY' | 'EMERGENCY';
 export type Phase = 'YOUR_TURN' | 'NEXT' | 'APPROACHING' | 'WAITING' | 'DONE' | 'SKIPPED' | 'CANCELLED' | 'CLOSED';
 export type StaffRole = 'OWNER' | 'MANAGER' | 'RECEPTIONIST';
+export type EntrySource = 'SAME_DAY' | 'ADVANCE' | 'RECEPTION';
+export type JoinBlock = 'QUEUE_CLOSED' | 'ORG_INACTIVE' | 'DOCTOR_UNAVAILABLE' | 'STOPPED_BY_DOCTOR' | 'FULL' | 'CUTOFF_PASSED' | 'SAME_DAY_DISABLED';
 export type ServiceCategory = 'CONSULTATION' | 'LAB_TEST' | 'DIAGNOSTIC' | 'PROCEDURE' | 'OTHER';
 
 export interface Me {
@@ -48,6 +50,13 @@ export interface QueueSnapshot {
   estimatedWaitMinutes: number;
   approachingThreshold: number;
   isAcceptingPatients: boolean;
+  joinBlock: JoinBlock | null;
+  joinBlockMessage: string | null;
+  missedCount: number;
+  closingRules: { capacity: number; cutoffTime: string | null; joinsStopped: boolean; joinsReopened: boolean };
+  allowSameDayJoin: boolean;
+  advanceBookingDays: number;
+  advanceBookingQuota: number | null;
   pausedAt: string | null;
   updatedAt: string;
 }
@@ -62,8 +71,10 @@ export interface EntryView {
     priority: Priority;
     joinedAt: string;
     calledAt: string | null;
+    recalledAt: string | null;
     completedAt: string | null;
     cancelledAt: string | null;
+    source: EntrySource;
   };
   currentToken: string | null;
   patientsAhead: number;
@@ -83,8 +94,10 @@ export interface StaffEntry {
   skipCount: number;
   joinedAt: string;
   calledAt: string | null;
+  recalledAt: string | null;
   completedAt: string | null;
   cancelledAt: string | null;
+  source: EntrySource;
   note: string | null;
   patient: { name: string; phone: string | null; age: number | null; gender: string | null };
   position?: number;
@@ -95,13 +108,14 @@ export interface StaffView {
   snapshot: QueueSnapshot;
   serving: StaffEntry | null;
   waiting: StaffEntry[];
-  skipped: StaffEntry[];
+  missed: StaffEntry[];
   finished: StaffEntry[];
   stats: {
     total: number;
     waiting: number;
     served: number;
-    skipped: number;
+    missed: number;
+    recalled: number;
     cancelled: number;
     noShow: number;
     avgWaitMinutes: number | null;
@@ -189,4 +203,55 @@ export interface Analytics {
   peakHour: number | null;
   weekdays: { dow: number; total: number }[];
   perQueue: { id: string; name: string; total: number; served: number; lost: number; avgWaitMinutes: number | null; avgConsultMinutes: number | null }[];
+}
+
+export interface Slot {
+  start: string;
+  end: string;
+}
+
+export interface BookingDay {
+  date: string;
+  dayOfWeek: number;
+  slots: Slot[];
+  booked: number;
+  remaining: number;
+  nextEstimatedTime: string | null;
+  available: boolean;
+  unavailable: 'NOT_CONSULTING' | 'FULL' | 'NO_TIME_LEFT' | null;
+  myBooking: { entryId: string; tokenLabel: string } | null;
+}
+
+export interface BookingSlots {
+  queueId: string;
+  advanceBookingDays: number;
+  advanceBookingQuota: number | null;
+  capacity: number;
+  timezone: string;
+  days: BookingDay[];
+}
+
+export interface MyBooking {
+  entryId: string;
+  tokenLabel: string;
+  date: string;
+  position: number;
+  estimatedTime: string | null;
+  bookedAt: string;
+  queue: {
+    id: string;
+    name: string;
+    service: { name: string } | null;
+    organization: { id: string; name: string; address: string; city: string };
+    doctor: { id: string; name: string; specialization: string } | null;
+  };
+}
+
+export interface DoctorAvailability {
+  timezone: string;
+  today: string;
+  todaySlots: Slot[];
+  consultingNow: boolean;
+  next: { date: string; slots: Slot[] } | null;
+  weekly: { dayOfWeek: number; slots: Slot[] }[];
 }

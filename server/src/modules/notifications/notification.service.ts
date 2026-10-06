@@ -18,6 +18,10 @@ export type NotificationType =
   | 'QUEUE_RESUMED'
   | 'QUEUE_CLOSED'
   | 'PRIORITY_CHANGED'
+  | 'QUEUE_OPENED'
+  | 'BOOKED'
+  | 'BOOKING_CANCELLED'
+  | 'RECALLED'
   | 'SYSTEM';
 
 export interface NotificationInput {

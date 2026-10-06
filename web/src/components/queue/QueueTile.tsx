@@ -22,7 +22,7 @@ export function QueueTile({ q, to }: { q: QueueSnapshot; to?: string }) {
       <dl className="grid grid-cols-3 gap-2 text-center">
         <div className="rounded-xl bg-surface-2 p-2">
           <dt className="text-xs text-muted">Now serving</dt>
-          <dd className="tabular font-bold">{q.currentToken ?? '—'}</dd>
+          <dd className="tabular font-bold whitespace-nowrap">{q.currentToken ?? '—'}</dd>
         </div>
         <div className="rounded-xl bg-surface-2 p-2">
           <dt className="flex items-center justify-center gap-1 text-xs text-muted">

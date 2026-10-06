@@ -155,4 +155,6 @@ bcrypt password hashing (cost 12) · short-lived JWT held only in memory · rota
 
 ## Roadmap
 
-Walk-in patients added by reception · QR code joining · SMS/WhatsApp and Web Push · appointment booking with check-in · multilingual UI · payments · lab report tracking · multi-branch rollups · ML wait prediction. See [docs/DESIGN.md §9](docs/DESIGN.md#9-roadmap).
+**Done recently:** advance booking (booking window, quota, estimated times), on-the-spot patients added at reception, missed → recall without disturbing the line, daily limit + cutoff-time closing rules with manual stop/reopen, doctor availability and location page.
+
+**Next:** QR code joining · SMS/WhatsApp and Web Push · arrival check-in for booked patients · multilingual UI · payments · lab report tracking · multi-branch rollups · ML wait prediction. See [docs/DESIGN.md §9](docs/DESIGN.md#9-roadmap).

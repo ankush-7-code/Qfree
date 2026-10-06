@@ -2,7 +2,7 @@ import { render, screen } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
 import { describe, expect, it, vi } from 'vitest';
 import { ApiError, errorMessage, qs } from '../lib/api';
-import { hourRange, minutes } from '../lib/format';
+import { clock, hourRange, minutes, statusLabelFor } from '../lib/format';
 import type { EntryView, QueueSnapshot } from '../lib/types';
 
 vi.mock('../hooks/useLive', () => ({ useSocketConnected: () => true }));
@@ -29,13 +29,20 @@ const snapshot: QueueSnapshot = {
   estimatedWaitMinutes: 42,
   approachingThreshold: 3,
   isAcceptingPatients: true,
+  joinBlock: null,
+  joinBlockMessage: null,
+  missedCount: 0,
+  closingRules: { capacity: 100, cutoffTime: null, joinsStopped: false, joinsReopened: false },
+  allowSameDayJoin: true,
+  advanceBookingDays: 3,
+  advanceBookingQuota: null,
   pausedAt: null,
   updatedAt: new Date().toISOString(),
 };
 
 const entry = (over: Partial<EntryView> = {}): EntryView => ({
   queueId: 'q1',
-  entry: { id: 'e1', tokenLabel: 'QF-031', tokenNumber: 31, status: 'WAITING', priority: 'NORMAL', joinedAt: new Date().toISOString(), calledAt: null, completedAt: null, cancelledAt: null },
+  entry: { id: 'e1', tokenLabel: 'QF-031', tokenNumber: 31, status: 'WAITING', priority: 'NORMAL', joinedAt: new Date().toISOString(), calledAt: null, recalledAt: null, completedAt: null, cancelledAt: null, source: 'SAME_DAY' },
   currentToken: 'QF-024',
   patientsAhead: 6,
   estimatedWaitMinutes: 35,
@@ -73,6 +80,12 @@ describe('LiveQueueCard', () => {
     expect(screen.queryByRole('button', { name: /leave queue/i })).not.toBeInTheDocument();
   });
 
+  it('tells a recalled patient they are being called again', () => {
+    const now = new Date().toISOString();
+    renderCard(entry({ phase: 'YOUR_TURN', patientsAhead: 0, entry: { ...entry().entry, status: 'SERVING', calledAt: now, recalledAt: now } }));
+    expect(screen.getByRole('alert')).toHaveTextContent("You're being called again!");
+  });
+
   it('labels the approaching phase in words, not only colour', () => {
     renderCard(entry({ phase: 'APPROACHING', patientsAhead: 2 }));
     expect(screen.getByText('Your turn is approaching')).toBeInTheDocument();
@@ -86,6 +99,14 @@ describe('helpers', () => {
     expect(minutes(95)).toBe('1 h 35 min');
     expect(hourRange(10)).toBe('10–11 AM');
     expect(hourRange(11)).toBe('11 AM–12 PM');
+  });
+
+  it('uses the patient-facing status names', () => {
+    expect(statusLabelFor({ status: 'BOOKED' })).toBe('Booked');
+    expect(statusLabelFor({ status: 'SERVING' })).toBe('Called');
+    expect(statusLabelFor({ status: 'SERVING', recalledAt: '2026-10-06T10:00:00Z' })).toBe('Recalled');
+    expect(statusLabelFor({ status: 'SKIPPED' })).toBe('Missed');
+    expect(clock('17:30')).toMatch(/5:30\s?PM/i);
   });
 
   it('builds query strings without empty values', () => {

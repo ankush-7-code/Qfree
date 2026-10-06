@@ -2,8 +2,12 @@ import clsx from 'clsx';
 import { useId, type InputHTMLAttributes, type ReactNode, type SelectHTMLAttributes, type TextareaHTMLAttributes } from 'react';
 import { AlertCircle, ChevronLeft, ChevronRight, Inbox, Loader2 } from 'lucide-react';
 
-export function Card({ className, children, as: As = 'section' }: { className?: string; children: ReactNode; as?: 'section' | 'div' | 'article' }) {
-  return <As className={clsx('rounded-2xl border border-line bg-surface p-5 shadow-[0_1px_2px_rgb(0_0_0/0.04)]', className)}>{children}</As>;
+export function Card({ className, children, as: As = 'section', id }: { className?: string; children: ReactNode; as?: 'section' | 'div' | 'article'; id?: string }) {
+  return (
+    <As id={id} className={clsx('scroll-mt-20 rounded-2xl border border-line bg-surface p-5 shadow-[0_1px_2px_rgb(0_0_0/0.04)]', className)}>
+      {children}
+    </As>
+  );
 }
 
 export function CardTitle({ children, action, className }: { children: ReactNode; action?: ReactNode; className?: string }) {

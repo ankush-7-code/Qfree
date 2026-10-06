@@ -4,7 +4,7 @@ import { logger } from './lib/logger.js';
 import { prisma } from './lib/prisma.js';
 import { createApp } from './app.js';
 import { initRealtime } from './realtime/io.js';
-import { closeStaleQueues } from './modules/queues/queue.service.js';
+import { closeStaleQueues, expireStaleBookings } from './modules/queues/queue.service.js';
 
 const app = createApp();
 const server = createServer(app);
@@ -14,6 +14,8 @@ async function housekeeping() {
   try {
     const closed = await closeStaleQueues();
     if (closed) logger.info({ closed }, 'closed queues from previous sessions');
+    const expired = await expireStaleBookings();
+    if (expired) logger.info({ expired }, 'expired bookings for sessions that did not open');
   } catch (err) {
     logger.error({ err }, 'housekeeping failed');
   }

@@ -113,7 +113,9 @@ components:
           properties:
             id: { type: string, format: uuid }
             tokenLabel: { type: string, example: QF-031 }
-            status: { type: string, enum: [WAITING, SERVING, COMPLETED, SKIPPED, CANCELLED, NO_SHOW] }
+            status: { type: string, enum: [BOOKED, WAITING, SERVING, COMPLETED, SKIPPED, CANCELLED, NO_SHOW], description: 'Shown as Booked, Waiting, Called (SERVING; Recalled when recalledAt is set), Missed (SKIPPED), Completed, Cancelled, No-show' }
+            recalledAt: { type: [string, 'null'], format: date-time }
+            source: { type: string, enum: [SAME_DAY, ADVANCE, RECEPTION] }
             priority: { type: string, enum: [NORMAL, PRIORITY, EMERGENCY] }
             joinedAt: { type: string, format: date-time }
         currentToken: { type: [string, 'null'], example: QF-024 }
@@ -143,6 +145,10 @@ components:
         capacity: { type: integer, minimum: 1, maximum: 5000, default: 100 }
         avgServiceMinutes: { type: number, minimum: 1, maximum: 60, default: 10 }
         approachingThreshold: { type: integer, minimum: 1, maximum: 20, default: 3 }
+        joinCutoffTime: { type: [string, 'null'], pattern: '^([01]\d|2[0-3]):[0-5]\d$', description: 'Closing rule: stop accepting new patients from this local time. With capacity (daily limit), whichever comes first.' }
+        allowSameDayJoin: { type: boolean, default: true, description: Patients may join online on the consultation day }
+        advanceBookingDays: { type: integer, minimum: 0, maximum: 60, default: 0, description: How many days ahead patients may book (0 = off) }
+        advanceBookingQuota: { type: [integer, 'null'], minimum: 1, description: Max places per day bookable in advance (null = up to capacity) }
     Analytics:
       type: object
       properties:
@@ -342,8 +348,44 @@ paths:
     post: { tags: [Queue operations], summary: Call a specific waiting patient, parameters: [{ $ref: '#/components/parameters/id' }, { $ref: '#/components/parameters/entryId' }], responses: { '200': { description: OK } } }
   /queues/{id}/entries/{entryId}/skip:
     post: { tags: [Queue operations], parameters: [{ $ref: '#/components/parameters/id' }, { $ref: '#/components/parameters/entryId' }], requestBody: { content: { application/json: { schema: { type: object, properties: { reason: { type: string } } } } } }, responses: { '200': { description: OK } } }
-  /queues/{id}/entries/{entryId}/requeue:
-    post: { tags: [Queue operations], summary: Put a skipped patient back behind the grace positions, parameters: [{ $ref: '#/components/parameters/id' }, { $ref: '#/components/parameters/entryId' }], responses: { '200': { description: OK } } }
+  /queues/{id}/entries/{entryId}/recall:
+    post:
+      tags: [Queue operations]
+      summary: Call a patient who missed their turn
+      description: Missed patients are kept out of the line so it is not disturbed; the doctor decides when to recall them (normally after the active queue). Completes the current patient first.
+      parameters: [{ $ref: '#/components/parameters/id' }, { $ref: '#/components/parameters/entryId' }]
+      responses: { '200': { description: '{ completed, recalled, stillWaiting }' }, '409': { $ref: '#/components/responses/Error' } }
+  /queues/{id}/walk-ins:
+    post:
+      tags: [Queue operations]
+      summary: Add an on-the-spot patient (reception)
+      description: For patients present in person. Ignores the cutoff time and "stop new patients"; respects the daily limit unless overrideLimit (audited).
+      parameters: [{ $ref: '#/components/parameters/id' }]
+      requestBody: { required: true, content: { application/json: { schema: { type: object, required: [fullName], properties: { fullName: { type: string }, phone: { type: string }, overrideLimit: { type: boolean } } } } } }
+      responses: { '201': { description: '{ entryId, tokenLabel, patientsAhead }' }, '409': { description: QUEUE_FULL } }
+  /queues/{id}/joins/stop:
+    post: { tags: [Queue operations], summary: Stop new patients for today (queue keeps serving), parameters: [{ $ref: '#/components/parameters/id' }], responses: { '200': { description: OK } } }
+  /queues/{id}/joins/reopen:
+    post: { tags: [Queue operations], summary: "Reopen new patients (also lifts today's cutoff time)", parameters: [{ $ref: '#/components/parameters/id' }], responses: { '200': { description: OK } } }
+  /queues/{id}/bookings:
+    get: { tags: [Queue operations], summary: Upcoming advance bookings grouped by day (staff), parameters: [{ $ref: '#/components/parameters/id' }], responses: { '200': { description: '{ days: [{ date, bookings[] }] }' } } }
+    post:
+      tags: [Queues]
+      summary: Book a numbered token for a future day (patient)
+      parameters: [{ $ref: '#/components/parameters/id' }]
+      requestBody: { required: true, content: { application/json: { schema: { type: object, required: [date], properties: { date: { type: string, format: date } } } } } }
+      responses:
+        '201': { description: '{ entryId, tokenLabel, date, position, estimatedTime }' }
+        '409': { description: 'BOOKING_DISABLED · OUTSIDE_BOOKING_WINDOW · NOT_CONSULTING · DAY_FULL · ALREADY_BOOKED · TOO_MANY_BOOKINGS', content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+  /queues/{id}/bookings/{entryId}:
+    delete: { tags: [Queues], summary: Cancel own booking (patient), parameters: [{ $ref: '#/components/parameters/id' }, { $ref: '#/components/parameters/entryId' }], responses: { '200': { description: OK } } }
+  /queues/{id}/booking-slots:
+    get:
+      tags: [Queues]
+      security: [{}, { bearer: [] }]
+      summary: Bookable days with remaining places and estimated times
+      parameters: [{ $ref: '#/components/parameters/id' }]
+      responses: { '200': { description: '{ advanceBookingDays, days: [{ date, slots, booked, remaining, nextEstimatedTime, available, unavailable, myBooking }] }' } }
   /queues/{id}/entries/{entryId}/no-show:
     post: { tags: [Queue operations], parameters: [{ $ref: '#/components/parameters/id' }, { $ref: '#/components/parameters/entryId' }], responses: { '200': { description: OK } } }
   /queues/{id}/entries/{entryId}/cancel:
@@ -366,6 +408,8 @@ paths:
     patch: { tags: [Patients], requestBody: { content: { application/json: { schema: { type: object, properties: { fullName: { type: string }, phone: { type: [string, 'null'] }, dateOfBirth: { type: [string, 'null'], format: date }, gender: { type: [string, 'null'], enum: [FEMALE, MALE, OTHER, PREFER_NOT_TO_SAY, null] } } } } } }, responses: { '200': { description: OK } } }
   /patients/me/queues:
     get: { tags: [Patients], summary: Active queues with live position, responses: { '200': { description: '{ items: (EntryView & { queue })[] }' } } }
+  /patients/me/bookings:
+    get: { tags: [Patients], summary: Upcoming advance bookings with estimated times, responses: { '200': { description: '{ items: [{ entryId, tokenLabel, date, position, estimatedTime, queue }] }' } } }
   /patients/me/history:
     get: { tags: [Patients], parameters: [{ $ref: '#/components/parameters/page' }, { $ref: '#/components/parameters/pageSize' }], responses: { '200': { description: Paged visits } } }
   /patients/{id}/history:
@@ -462,7 +506,7 @@ paths:
               properties:
                 maxActiveQueuesPerPatient: { type: integer, minimum: 1, maximum: 10 }
                 enforceOperatingHours: { type: boolean }
-                requeueGrace: { type: integer, minimum: 0, maximum: 10 }
+                maxUpcomingBookingsPerPatient: { type: integer, minimum: 1, maximum: 20 }
                 allowJoinWhilePaused: { type: boolean }
                 maintenanceMessage: { type: string }
       responses: { '200': { description: OK } }
