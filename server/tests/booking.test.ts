@@ -12,7 +12,7 @@ const today = () => localDate(TZ);
 const join = (queueId: string, s: Session) => api().post(`/api/queues/${queueId}/join`).set(s.auth);
 const configure = (queueId: string, doctor: Session, body: Record<string, unknown>) =>
   api().patch(`/api/queues/${queueId}`).set(doctor.auth).send(body).expect(200);
-const book = (queueId: string, s: Session, date: string) => api().post(`/api/queues/${queueId}/bookings`).set(s.auth).send({ date });
+const book = (queueId: string, s: Session, date: string, time?: string) => api().post(`/api/queues/${queueId}/bookings`).set(s.auth).send({ date, time });
 
 describe('closing rules', () => {
   it('stops new patients at the daily limit', async () => {
@@ -96,40 +96,68 @@ describe('on-the-spot patients', () => {
 });
 
 describe('advance booking', () => {
-  it('is off until the doctor sets a booking window', async () => {
-    const { queueId } = await setupOpenQueue();
-    const res = await book(queueId, await register(), addDays(today(), 1));
-    expect(res.body.error.code).toBe('BOOKING_DISABLED');
+  it('is on for every queue by default; the doctor can turn it off', async () => {
+    const { queueId, doctor } = await setupOpenQueue();
+    expect((await book(queueId, await register(), addDays(today(), 1))).status).toBe(201);
+    await configure(queueId, doctor, { advanceBookingDays: 0 });
+    expect((await book(queueId, await register(), addDays(today(), 1))).body.error.code).toBe('BOOKING_DISABLED');
   });
 
-  it('shows bookable days and issues numbered tokens with estimated times', async () => {
+  it('shows days with time slots and books the chosen time', async () => {
     const { queueId, doctor } = await setupOpenQueue();
-    await configure(queueId, doctor, { advanceBookingDays: 3, capacity: 20 });
+    await configure(queueId, doctor, { advanceBookingDays: 3, capacity: 50 }); // 10 min per patient, 30-min slots → 3 per slot
     const tomorrow = addDays(today(), 1);
 
     const slots = (await api().get(`/api/queues/${queueId}/booking-slots`)).body;
-    expect(slots.days.map((d: { date: string }) => d.date)).toEqual([tomorrow, addDays(today(), 2), addDays(today(), 3)]);
-    expect(slots.days[0]).toMatchObject({ available: true, booked: 0, remaining: 20, nextEstimatedTime: '00:00' });
+    expect(slots.days.map((d: { date: string }) => d.date)).toEqual([today(), tomorrow, addDays(today(), 2), addDays(today(), 3)]);
+    const tomorrowSlots = slots.days[1];
+    expect(tomorrowSlots.times[0]).toEqual({ start: '00:00', end: '00:30', remaining: 3 });
+    expect(tomorrowSlots.times.find((t: { start: string }) => t.start === '10:00')).toEqual({ start: '10:00', end: '10:30', remaining: 3 });
 
-    const [p1, p2] = await Promise.all([register(), register()]);
-    const b1 = await book(queueId, p1, tomorrow);
-    expect(b1.status).toBe(201);
-    expect(b1.body).toMatchObject({ tokenLabel: 'QF-001', date: tomorrow, position: 1, estimatedTime: '00:00' });
-    expect((await book(queueId, p2, tomorrow)).body).toMatchObject({ tokenLabel: 'QF-002', estimatedTime: '00:10' });
+    const ps = await Promise.all(Array.from({ length: 5 }, () => register()));
+    for (const p of ps.slice(0, 3)) expect((await book(queueId, p, tomorrow, '10:00')).body).toMatchObject({ time: '10:00', timeEnd: '10:30', status: 'BOOKED' });
+    expect((await book(queueId, ps[3], tomorrow, '10:00')).body.error.code).toBe('SLOT_FULL');
+    expect((await book(queueId, ps[3], tomorrow, '10:10')).body.error.code).toBe('SLOT_UNAVAILABLE');
+    expect((await book(queueId, ps[3], tomorrow, '09:00')).body).toMatchObject({ tokenLabel: 'QF-004', time: '09:00' });
+    expect((await book(queueId, ps[3], tomorrow, '11:00')).body.error.code).toBe('ALREADY_BOOKED');
+    expect((await book(queueId, ps[4], addDays(today(), 4))).body.error.code).toBe('OUTSIDE_BOOKING_WINDOW');
 
-    expect((await book(queueId, p1, tomorrow)).body.error.code).toBe('ALREADY_BOOKED');
-    expect((await book(queueId, p1, today())).body.error.code).toBe('OUTSIDE_BOOKING_WINDOW');
-    expect((await book(queueId, p1, addDays(today(), 4))).body.error.code).toBe('OUTSIDE_BOOKING_WINDOW');
+    const after = (await api().get(`/api/queues/${queueId}/booking-slots`).set(ps[0].auth)).body.days[1];
+    expect(after.times.find((t: { start: string }) => t.start === '10:00').remaining).toBe(0);
+    expect(after.myBooking).toMatchObject({ tokenLabel: 'QF-001', appointmentTime: '10:00' });
 
-    const mine = (await api().get('/api/patients/me/bookings').set(p2.auth)).body.items;
-    expect(mine).toHaveLength(1);
-    expect(mine[0]).toMatchObject({ tokenLabel: 'QF-002', date: tomorrow, position: 2, estimatedTime: '00:10' });
+    const mine = (await api().get('/api/patients/me/bookings').set(ps[3].auth)).body.items;
+    expect(mine[0]).toMatchObject({ tokenLabel: 'QF-004', date: tomorrow, estimatedTime: '09:00' });
 
-    const withMine = (await api().get(`/api/queues/${queueId}/booking-slots`).set(p1.auth)).body;
-    expect(withMine.days[0]).toMatchObject({ booked: 2, remaining: 18, myBooking: { tokenLabel: 'QF-001' } });
+    // On the day the line follows the booked times: the 9:00 booking (made last) is seen first.
+    await prisma.queueEntry.updateMany({ where: { queueId, status: 'BOOKED' }, data: { sessionDate: today() } });
+    await prisma.queue.update({ where: { id: queueId }, data: { sessionDate: addDays(today(), -1), status: 'CLOSED' } });
+    await api().post(`/api/queues/${queueId}/open`).set(doctor.auth).send({ override: true }).expect(200);
+    const view = (await api().get(`/api/queues/${queueId}/staff`).set(doctor.auth)).body;
+    expect(view.waiting.map((e: { tokenLabel: string; appointmentTime: string }) => `${e.tokenLabel}@${e.appointmentTime}`)).toEqual([
+      'QF-004@09:00',
+      'QF-001@10:00',
+      'QF-002@10:00',
+      'QF-003@10:00',
+    ]);
+  });
 
-    const staff = (await api().get(`/api/queues/${queueId}/bookings`).set(doctor.auth)).body;
-    expect(staff.days[0].bookings.map((b: { tokenLabel: string }) => b.tokenLabel)).toEqual(['QF-001', 'QF-002']);
+  it('a booking for later today joins the live line at its time and is not called early', async () => {
+    const { queueId, doctor } = await setupOpenQueue();
+    const laterToday = (await api().get(`/api/queues/${queueId}/booking-slots`)).body.days[0].times.filter((t: { start: string }) => t.start >= '00:00').at(-1);
+    if (!laterToday) return; // run right before midnight: no slots left today
+    const [walkIn, booker] = await Promise.all([register(), register()]);
+    const booked = await book(queueId, booker, today(), laterToday.start);
+    expect(booked.body).toMatchObject({ status: 'WAITING', time: laterToday.start });
+    await join(queueId, walkIn);
+
+    const view = (await api().get(`/api/queues/${queueId}/staff`).set(doctor.auth)).body;
+    expect(view.waiting.map((e: { source: string }) => e.source)).toEqual(['SAME_DAY', 'ADVANCE']); // walk-in (now) before the later slot
+    expect((await api().post(`/api/queues/${queueId}/next`).set(doctor.auth)).body.called).toBe(view.waiting[0].tokenLabel);
+    const early = (await api().post(`/api/queues/${queueId}/next`).set(doctor.auth)).body;
+    expect(early).toMatchObject({ called: null, nextAppointment: { token: booked.body.tokenLabel, time: laterToday.start } });
+    // Staff can still call them early on purpose.
+    expect((await api().post(`/api/queues/${queueId}/entries/${booked.body.entryId}/call`).set(doctor.auth)).body.called).toBe(booked.body.tokenLabel);
   });
 
   it('keeps places for on-the-spot patients with an advance-booking quota', async () => {

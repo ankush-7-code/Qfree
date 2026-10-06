@@ -35,7 +35,10 @@ function DoctorCard({ d }: { d: DoctorSummary }) {
             <MapPin className="size-3.5" aria-hidden /> {d.organization.name}, {d.organization.city}
           </p>
         )}
-        <div className="mt-2">{d.isAvailable ? <Badge tone="active">Available</Badge> : <Badge tone="paused">Not available</Badge>}</div>
+        <div className="mt-2 flex flex-wrap items-center gap-3">
+          {d.isAvailable ? <Badge tone="active">Available</Badge> : <Badge tone="paused">Not available</Badge>}
+          <span className="font-semibold text-brand">Book appointment ›</span>
+        </div>
       </div>
     </Link>
   );
@@ -56,6 +59,7 @@ function OrgCard({ o }: { o: OrgSummary }) {
         <p className="flex items-center gap-1 text-sm text-muted">
           <MapPin className="size-3.5" aria-hidden /> {o.address}, {o.city}
         </p>
+        <p className="mt-1 font-semibold text-brand">Book appointment ›</p>
         {o._count && (
           <p className="mt-1 text-sm text-ink-2">
             {o._count.doctors} doctors · {o._count.services} services · {o._count.queues} queues

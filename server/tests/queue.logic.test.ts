@@ -13,6 +13,9 @@ import {
   weekdayOf,
   dayAvailability,
   estimatedTimeForPosition,
+  bookingSlots,
+  sortKeyForTime,
+  isAppointmentDue,
   type JoinRuleInput,
   type Orderable,
 } from '../src/modules/queues/queue.logic.js';
@@ -76,11 +79,44 @@ describe('closing rules', () => {
 });
 
 describe('booking calendar', () => {
-  it('offers tomorrow through the booking window', () => {
-    expect(bookableDates('2026-10-30', 3)).toEqual(['2026-10-31', '2026-11-01', '2026-11-02']);
+  it('offers today (later slots) through the booking window, nothing when booking is off', () => {
+    expect(bookableDates('2026-10-30', 3)).toEqual(['2026-10-30', '2026-10-31', '2026-11-01', '2026-11-02']);
     expect(bookableDates('2026-10-30', 0)).toEqual([]);
     expect(addDays('2026-12-31', 1)).toBe('2027-01-01');
     expect(weekdayOf('2026-10-06')).toBe(2); // Tuesday
+  });
+
+  it('splits consultation sessions into bookable time slots sized to the doctor’s pace', () => {
+    const slots = bookingSlots(
+      [
+        { start: '09:00', end: '10:10' },
+        { start: '17:00', end: '18:00' },
+      ],
+      30,
+      600,
+    );
+    expect(slots).toEqual([
+      { start: '09:00', end: '09:30', capacity: 3 },
+      { start: '09:30', end: '10:00', capacity: 3 },
+      // 10:00–10:10 is shorter than half a slot, so it is not offered
+      { start: '17:00', end: '17:30', capacity: 3 },
+      { start: '17:30', end: '18:00', capacity: 3 },
+    ]);
+    expect(bookingSlots([{ start: '09:00', end: '10:00' }], 15, 1500)[0].capacity).toBe(1); // at least one per slot
+  });
+
+  it('orders the day by scheduled or arrival time', () => {
+    const nineThirtyBooking = { tokenNumber: 1, priority: 'NORMAL' as const, sortKey: sortKeyForTime('09:30') };
+    const walkInAtNine = { tokenNumber: 2, priority: 'NORMAL' as const, sortKey: sortKeyForTime('09:00') };
+    const walkInAtTen = { tokenNumber: 3, priority: 'NORMAL' as const, sortKey: sortKeyForTime('10:00') };
+    expect(orderWaiting([nineThirtyBooking, walkInAtTen, walkInAtNine]).map((x) => x.tokenNumber)).toEqual([2, 1, 3]);
+  });
+
+  it('only calls a booked patient when their slot is near', () => {
+    expect(isAppointmentDue(null, '09:00')).toBe(true);
+    expect(isAppointmentDue('10:00', '09:50')).toBe(true);
+    expect(isAppointmentDue('17:00', '12:00')).toBe(false);
+    expect(isAppointmentDue('17:00', '12:00', 'EMERGENCY')).toBe(true);
   });
 
   const hours = [0, 1, 2, 3, 4, 5, 6].map((d) => ({ dayOfWeek: d, openTime: '08:00', closeTime: '20:00', isClosed: d === 0 }));

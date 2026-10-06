@@ -36,6 +36,7 @@ const queueFields = {
   allowSameDayJoin: z.boolean(),
   advanceBookingDays: z.coerce.number().int().min(0).max(60),
   advanceBookingQuota: z.coerce.number().int().min(1).max(5000).nullable(),
+  bookingSlotMinutes: z.coerce.number().pipe(z.union([z.literal(15), z.literal(20), z.literal(30), z.literal(45), z.literal(60)])),
 };
 
 const createQueueBody = z.object({
@@ -49,7 +50,8 @@ const createQueueBody = z.object({
   avgServiceMinutes: queueFields.avgServiceMinutes.default(10),
   approachingThreshold: queueFields.approachingThreshold.default(3),
   allowSameDayJoin: queueFields.allowSameDayJoin.default(true),
-  advanceBookingDays: queueFields.advanceBookingDays.default(0),
+  advanceBookingDays: queueFields.advanceBookingDays.default(7),
+  bookingSlotMinutes: queueFields.bookingSlotMinutes.default(30),
   advanceBookingQuota: queueFields.advanceBookingQuota.optional(),
 });
 
@@ -116,8 +118,8 @@ queueRouter.get('/:id/booking-slots', optionalAuth, async (req, res) => {
 
 queueRouter.post('/:id/bookings', authenticate, requireRole('PATIENT'), joinLimiter, async (req, res) => {
   const { id } = parse(idParams, req.params);
-  const { date } = parse(z.object({ date: isoDate }), req.body);
-  res.status(201).json(await svc.bookAppointment(id, currentUser(req).id, date));
+  const { date, time } = parse(z.object({ date: isoDate, time: hhmm.optional() }), req.body);
+  res.status(201).json(await svc.bookAppointment(id, currentUser(req).id, date, time));
 });
 
 queueRouter.delete('/:id/bookings/:entryId', authenticate, requireRole('PATIENT'), async (req, res) => {
@@ -257,14 +259,14 @@ manage.get('/bookings', async (req, res) => {
   const id = qid(req);
   const rows = await prisma.queueEntry.findMany({
     where: { queueId: id, status: 'BOOKED' },
-    orderBy: [{ sessionDate: 'asc' }, { tokenNumber: 'asc' }],
+    orderBy: [{ sessionDate: 'asc' }, { sortKey: 'asc' }, { tokenNumber: 'asc' }],
     take: 500,
-    select: { id: true, tokenLabel: true, tokenNumber: true, sessionDate: true, joinedAt: true, patient: { select: { user: { select: { fullName: true, phone: true } } } } },
+    select: { id: true, tokenLabel: true, tokenNumber: true, sessionDate: true, joinedAt: true, appointmentTime: true, patient: { select: { user: { select: { fullName: true, phone: true } } } } },
   });
-  const days = new Map<string, { date: string; bookings: { id: string; tokenLabel: string; bookedAt: Date; patient: { name: string; phone: string | null } }[] }>();
+  const days = new Map<string, { date: string; bookings: { id: string; tokenLabel: string; appointmentTime: string | null; bookedAt: Date; patient: { name: string; phone: string | null } }[] }>();
   for (const r of rows) {
     const day = days.get(r.sessionDate) ?? { date: r.sessionDate, bookings: [] };
-    day.bookings.push({ id: r.id, tokenLabel: r.tokenLabel, bookedAt: r.joinedAt, patient: { name: r.patient.user.fullName, phone: r.patient.user.phone } });
+    day.bookings.push({ id: r.id, tokenLabel: r.tokenLabel, appointmentTime: r.appointmentTime, bookedAt: r.joinedAt, patient: { name: r.patient.user.fullName, phone: r.patient.user.phone } });
     days.set(r.sessionDate, day);
   }
   res.json({ days: [...days.values()] });
@@ -370,6 +372,7 @@ queueRouter.post('/', authenticate, requireRole('DOCTOR', 'ORG_ADMIN', 'ADMIN'),
       allowSameDayJoin: body.allowSameDayJoin,
       advanceBookingDays: body.advanceBookingDays,
       advanceBookingQuota: body.advanceBookingQuota ?? null,
+      bookingSlotMinutes: body.bookingSlotMinutes,
     },
   });
   await auditFrom(req, { action: 'queue.create', entityType: 'queue', entityId: queue.id });

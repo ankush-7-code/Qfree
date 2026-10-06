@@ -3,7 +3,7 @@ import { useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router';
 import { BellRing, LogOut, MapPin, Stethoscope, TestTube2, WifiOff } from 'lucide-react';
 import type { EntryView, QueueSnapshot } from '../../lib/types';
-import { minutes, time } from '../../lib/format';
+import { clock, minutes, time } from '../../lib/format';
 import { useSocketConnected } from '../../hooks/useLive';
 import { Button } from '../ui/Button';
 import { Dialog } from '../ui/Dialog';
@@ -111,6 +111,7 @@ export function LiveQueueCard({ snapshot, myEntry, onLeave, leaving, compact }: 
           <Row label="Current token" value={snapshot.currentToken ?? '—'} />
           <Row label="Your token" value={myEntry.entry.tokenLabel} strong />
           {waiting && <Row label="Patients ahead" value={myEntry.patientsAhead} />}
+          {myEntry.entry.appointmentTime && myEntry.entry.status !== 'COMPLETED' && <Row label="Appointment time" value={clock(myEntry.entry.appointmentTime)} />}
           {waiting && (
             <Row
               label="Estimated wait"

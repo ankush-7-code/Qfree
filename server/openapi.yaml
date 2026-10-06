@@ -147,7 +147,8 @@ components:
         approachingThreshold: { type: integer, minimum: 1, maximum: 20, default: 3 }
         joinCutoffTime: { type: [string, 'null'], pattern: '^([01]\d|2[0-3]):[0-5]\d$', description: 'Closing rule: stop accepting new patients from this local time. With capacity (daily limit), whichever comes first.' }
         allowSameDayJoin: { type: boolean, default: true, description: Patients may join online on the consultation day }
-        advanceBookingDays: { type: integer, minimum: 0, maximum: 60, default: 0, description: How many days ahead patients may book (0 = off) }
+        advanceBookingDays: { type: integer, minimum: 0, maximum: 60, default: 7, description: How many days ahead patients may book (0 = off; later slots today are included) }
+        bookingSlotMinutes: { type: integer, enum: [15, 20, 30, 45, 60], default: 30, description: Length of bookable appointment slots }
         advanceBookingQuota: { type: [integer, 'null'], minimum: 1, description: Max places per day bookable in advance (null = up to capacity) }
     Analytics:
       type: object
@@ -373,10 +374,10 @@ paths:
       tags: [Queues]
       summary: Book a numbered token for a future day (patient)
       parameters: [{ $ref: '#/components/parameters/id' }]
-      requestBody: { required: true, content: { application/json: { schema: { type: object, required: [date], properties: { date: { type: string, format: date } } } } } }
+      requestBody: { required: true, content: { application/json: { schema: { type: object, required: [date], properties: { date: { type: string, format: date, description: 'Today or up to advanceBookingDays ahead' }, time: { type: string, example: '10:30', description: 'Slot start (HH:MM, org-local) from booking-slots; omitted = earliest free slot' } } } } } }
       responses:
-        '201': { description: '{ entryId, tokenLabel, date, position, estimatedTime }' }
-        '409': { description: 'BOOKING_DISABLED · OUTSIDE_BOOKING_WINDOW · NOT_CONSULTING · DAY_FULL · ALREADY_BOOKED · TOO_MANY_BOOKINGS', content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+        '201': { description: '{ entryId, tokenLabel, date, time, timeEnd, status }' }
+        '409': { description: 'BOOKING_DISABLED · OUTSIDE_BOOKING_WINDOW · NOT_CONSULTING · DAY_FULL · SLOT_FULL · SLOT_UNAVAILABLE · ALREADY_BOOKED · ALREADY_IN_QUEUE · QUEUE_CLOSED · TOO_MANY_BOOKINGS', content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
   /queues/{id}/bookings/{entryId}:
     delete: { tags: [Queues], summary: Cancel own booking (patient), parameters: [{ $ref: '#/components/parameters/id' }, { $ref: '#/components/parameters/entryId' }], responses: { '200': { description: OK } } }
   /queues/{id}/booking-slots:

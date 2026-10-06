@@ -21,7 +21,7 @@ function HoursTable({ hours }: { hours: Hours[] }) {
               {day}
               {i === today && <span className="sr-only"> (today)</span>}
             </span>
-            <span className="tabular text-ink-2">{!h || h.isClosed ? 'Closed' : `${h.openTime} – ${h.closeTime}`}</span>
+            <span className="tabular text-ink-2">{!h || h.isClosed ? 'Closed' : `${clock(h.openTime)} – ${clock(h.closeTime)}`}</span>
           </li>
         );
       })}
@@ -33,9 +33,23 @@ function LiveQueues({ queues, cacheKey }: { queues: QueueSnapshot[]; cacheKey: r
   useLiveSnapshots(cacheKey, queues.map((q) => q.id));
   if (!queues.length) return <EmptyState title="No queues yet">This provider has not set up a digital queue.</EmptyState>;
   return (
-    <div className="grid gap-3 sm:grid-cols-2">
+    <div className="grid gap-4 sm:grid-cols-2">
       {queues.map((q) => (
-        <QueueTile key={q.id} q={q} />
+        <div key={q.id} className="flex flex-col gap-2">
+          <QueueTile q={q} />
+          <div className="flex flex-wrap gap-2">
+            {q.advanceBookingDays > 0 && (
+              <LinkButton to={`/queues/${q.id}#book`} size="sm" icon={<CalendarDays className="size-4" />}>
+                Book appointment
+              </LinkButton>
+            )}
+            {q.isAcceptingPatients && (
+              <LinkButton to={`/queues/${q.id}`} size="sm" variant="secondary" icon={<Ticket className="size-4" />}>
+                Join today's queue
+              </LinkButton>
+            )}
+          </div>
+        </div>
       ))}
     </div>
   );
@@ -205,7 +219,7 @@ export function DoctorDetails() {
                       )}
                       {q.advanceBookingDays > 0 && (
                         <LinkButton to={`/queues/${q.id}#book`} variant={q.isAcceptingPatients ? 'secondary' : 'primary'} icon={<CalendarDays className="size-5" />}>
-                          Book a later day
+                          Book appointment
                         </LinkButton>
                       )}
                     </div>

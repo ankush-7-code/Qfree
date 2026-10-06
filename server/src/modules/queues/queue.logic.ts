@@ -35,6 +35,12 @@ export function orderWaiting<T extends Orderable>(entries: T[]): T[] {
 
 export const sortKeyForToken = (tokenNumber: number) => tokenNumber * SORT_KEY_GAP;
 
+/**
+ * The day's line is ordered by scheduled or arrival time: a booked patient by their slot start,
+ * everyone else by the local time they joined. Ties fall back to token order.
+ */
+export const sortKeyForTime = (hhmm: string) => (Number(hhmm.slice(0, 2)) * 60 + Number(hhmm.slice(3, 5))) * SORT_KEY_GAP;
+
 export const formatToken = (prefix: string, tokenNumber: number) => `${prefix}-${String(tokenNumber).padStart(3, '0')}`;
 
 /** Remaining seconds for the patient currently being served (never below a small floor while they are inside). */
@@ -156,9 +162,9 @@ export function addDays(date: string, days: number): string {
 
 export const weekdayOf = (date: string) => new Date(`${date}T12:00:00Z`).getUTCDay();
 
-/** Dates a patient may book: tomorrow through `today + days`. */
+/** Dates a patient may book: today (later slots only) through `today + days`; none when booking is off. */
 export function bookableDates(today: string, days: number): string[] {
-  return Array.from({ length: Math.max(0, days) }, (_, i) => addDays(today, i + 1));
+  return days > 0 ? Array.from({ length: days + 1 }, (_, i) => addDays(today, i)) : [];
 }
 
 export interface Slot {
@@ -186,8 +192,8 @@ export function dayAvailability(
   return [{ start: org.openTime, end: org.closeTime }];
 }
 
-const toMinutesOfDay = (hhmm: string) => Number(hhmm.slice(0, 2)) * 60 + Number(hhmm.slice(3, 5));
-const fromMinutesOfDay = (m: number) => `${String(Math.floor(m / 60) % 24).padStart(2, '0')}:${String(Math.round(m % 60)).padStart(2, '0')}`;
+export const toMinutesOfDay = (hhmm: string) => Number(hhmm.slice(0, 2)) * 60 + Number(hhmm.slice(3, 5));
+export const fromMinutesOfDay = (m: number) => `${String(Math.floor(m / 60) % 24).padStart(2, '0')}:${String(Math.round(m % 60)).padStart(2, '0')}`;
 
 /**
  * Estimated consultation time for the Nth patient of a day, walking through the day's slots
@@ -201,4 +207,48 @@ export function estimatedTimeForPosition(slots: Slot[], position: number, avgSer
     offset -= length;
   }
   return null;
+}
+
+// ─────────────── Bookable time slots ───────────────
+
+export const BOOKING_LEAD_MINUTES = 15; // slots later today must start at least this far ahead
+export const APPOINTMENT_DUE_MINUTES = 15; // "call next" skips appointments further away than this
+
+export interface TimeSlot {
+  start: string;
+  end: string;
+  capacity: number;
+}
+
+/**
+ * Split the day's consultation sessions into bookable slots of `slotMinutes`. Each slot holds as many
+ * patients as fit at the average pace (at least one). A trailing piece shorter than half a slot is dropped.
+ */
+export function bookingSlots(sessions: Slot[], slotMinutes: number, avgServiceSeconds: number): TimeSlot[] {
+  const out: TimeSlot[] = [];
+  for (const s of sessions) {
+    const end = toMinutesOfDay(s.end);
+    for (let t = toMinutesOfDay(s.start); t < end; t += slotMinutes) {
+      const slotEnd = Math.min(t + slotMinutes, end);
+      if (slotEnd - t < slotMinutes / 2) break;
+      out.push({
+        start: fromMinutesOfDay(t),
+        end: fromMinutesOfDay(slotEnd),
+        capacity: Math.max(1, Math.floor(((slotEnd - t) * 60) / avgServiceSeconds)),
+      });
+    }
+  }
+  return out;
+}
+
+/** Whether a booked patient's slot is close enough to call them (no appointment or non-normal priority = always due). */
+export function isAppointmentDue(appointmentTime: string | null, localTime: string, priority: PriorityLevel = 'NORMAL') {
+  if (!appointmentTime || priority !== 'NORMAL') return true;
+  return toMinutesOfDay(appointmentTime) <= toMinutesOfDay(localTime) + APPOINTMENT_DUE_MINUTES;
+}
+
+/** "17:30" → "5:30 PM" (used in notification text). */
+export function twelveHour(hhmm: string) {
+  const h = Number(hhmm.slice(0, 2));
+  return `${h % 12 || 12}:${hhmm.slice(3, 5)} ${h < 12 ? 'AM' : 'PM'}`;
 }

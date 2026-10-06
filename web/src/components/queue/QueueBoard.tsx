@@ -40,6 +40,7 @@ function PriorityBadge({ p }: { p: Priority }) {
 
 function SourceBadge({ e }: { e: StaffEntry }) {
   if (e.source === 'SAME_DAY') return null;
+  if (e.source === 'ADVANCE' && e.appointmentTime) return <Badge tone="approach">Booked · {clock(e.appointmentTime)}</Badge>;
   return <Badge tone={e.source === 'ADVANCE' ? 'approach' : 'neutral'}>{sourceLabel[e.source]}</Badge>;
 }
 
@@ -99,7 +100,7 @@ function IntakeBar({ view, busy, run, onAddPatient }: { view: StaffView; busy: b
 function UpcomingBookings({ queueId, days }: { queueId: string; days: number }) {
   const { data } = useQuery({
     queryKey: ['queue', queueId, 'bookings'],
-    queryFn: () => api.get<{ days: { date: string; bookings: { id: string; tokenLabel: string; patient: { name: string; phone: string | null } }[] }[] }>(`/queues/${queueId}/bookings`),
+    queryFn: () => api.get<{ days: { date: string; bookings: { id: string; tokenLabel: string; appointmentTime: string | null; patient: { name: string; phone: string | null } }[] }[] }>(`/queues/${queueId}/bookings`),
     enabled: days > 0,
   });
   if (!days || !data) return null;
@@ -122,6 +123,7 @@ function UpcomingBookings({ queueId, days }: { queueId: string; days: number }) 
                 <ul className="mt-1 flex flex-col divide-y divide-line">
                   {d.bookings.map((b) => (
                     <li key={b.id} className="flex flex-wrap gap-3 py-1.5">
+                      <span className="tabular min-w-20 font-semibold">{b.appointmentTime ? clock(b.appointmentTime) : '—'}</span>
                       <span className="tabular min-w-20 font-semibold">{b.tokenLabel}</span>
                       <span className="flex-1">{b.patient.name}</span>
                       {b.patient.phone && <span className="text-sm text-muted">{b.patient.phone}</span>}
@@ -153,7 +155,14 @@ export function QueueBoard({ queueId, detailsBase }: { queueId: string; detailsB
     onSuccess: (res, vars) => {
       qc.invalidateQueries({ queryKey: staffKey(queueId) });
       if (vars.path === 'next') {
-        toast(res.called ? { tone: 'success', title: `Now calling ${res.called}` } : { tone: 'info', title: 'No one is waiting' });
+        const later = res.nextAppointment as { token: string; time: string } | undefined;
+        toast(
+          res.called
+            ? { tone: 'success', title: `Now calling ${res.called}` }
+            : later
+              ? { tone: 'info', title: `Next patient is booked for ${clock(later.time)}`, body: `${later.token} isn't due yet. Use “Call now” to call them early.` }
+              : { tone: 'info', title: 'No one is waiting' },
+        );
       }
       if (vars.path.endsWith('/recall')) toast({ tone: 'success', title: `Recalling ${res.recalled}` });
       if (vars.path === 'walk-ins') {

@@ -57,6 +57,7 @@ export interface QueueSnapshot {
   allowSameDayJoin: boolean;
   advanceBookingDays: number;
   advanceBookingQuota: number | null;
+  bookingSlotMinutes: number;
   pausedAt: string | null;
   updatedAt: string;
 }
@@ -72,6 +73,7 @@ export interface EntryView {
     joinedAt: string;
     calledAt: string | null;
     recalledAt: string | null;
+    appointmentTime: string | null;
     completedAt: string | null;
     cancelledAt: string | null;
     source: EntrySource;
@@ -95,6 +97,7 @@ export interface StaffEntry {
   joinedAt: string;
   calledAt: string | null;
   recalledAt: string | null;
+  appointmentTime: string | null;
   completedAt: string | null;
   cancelledAt: string | null;
   source: EntrySource;
@@ -214,18 +217,20 @@ export interface BookingDay {
   date: string;
   dayOfWeek: number;
   slots: Slot[];
+  times: { start: string; end: string; remaining: number }[];
   booked: number;
   remaining: number;
   nextEstimatedTime: string | null;
   available: boolean;
   unavailable: 'NOT_CONSULTING' | 'FULL' | 'NO_TIME_LEFT' | null;
-  myBooking: { entryId: string; tokenLabel: string } | null;
+  myBooking: { entryId: string; tokenLabel: string; appointmentTime: string | null } | null;
 }
 
 export interface BookingSlots {
   queueId: string;
   advanceBookingDays: number;
   advanceBookingQuota: number | null;
+  bookingSlotMinutes: number;
   capacity: number;
   timezone: string;
   days: BookingDay[];

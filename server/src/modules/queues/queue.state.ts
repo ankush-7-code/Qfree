@@ -10,6 +10,7 @@ import {
   estimateWaitSeconds,
   JOIN_BLOCK_MESSAGE,
   sameDayJoinBlock,
+  toMinutesOfDay,
   orderWaiting,
   progressFraction,
   toMinutes,
@@ -153,6 +154,7 @@ export function buildSnapshot(state: QueueState) {
     allowSameDayJoin: queue.allowSameDayJoin,
     advanceBookingDays: queue.advanceBookingDays,
     advanceBookingQuota: queue.advanceBookingQuota,
+    bookingSlotMinutes: queue.bookingSlotMinutes,
     pausedAt: queue.status === 'PAUSED' ? queue.pausedAt : null,
     updatedAt: now,
   };
@@ -166,8 +168,14 @@ export function buildEntryView(state: QueueState, entry: StateEntry) {
   const idx = waiting.findIndex((w) => w.id === entry.id);
   const patientsAhead = idx >= 0 ? idx : 0;
   const status = effectiveStatus(queue);
-  const waitSeconds =
+  const queueWait =
     entry.status === 'WAITING' ? estimateWaitSeconds(patientsAhead, queue.avgServiceSeconds, serving?.calledAt ?? null, now) : 0;
+  // A booked patient is not expected before their slot, even if the line moves faster.
+  const untilAppointment =
+    entry.status === 'WAITING' && entry.appointmentTime
+      ? Math.max(0, (toMinutesOfDay(entry.appointmentTime) - toMinutesOfDay(localParts(queue.organization.timezone, now).time)) * 60)
+      : 0;
+  const waitSeconds = Math.max(queueWait, untilAppointment);
   const tokensBefore = state.entries.filter(
     (e) => e.tokenNumber < entry.tokenNumber && e.status !== 'CANCELLED',
   ).length;
@@ -183,6 +191,7 @@ export function buildEntryView(state: QueueState, entry: StateEntry) {
       joinedAt: entry.joinedAt,
       calledAt: entry.calledAt,
       recalledAt: entry.recalledAt,
+      appointmentTime: entry.appointmentTime,
       completedAt: entry.completedAt,
       cancelledAt: entry.cancelledAt,
       source: entry.source,
@@ -222,6 +231,7 @@ export function buildStaffView(state: QueueState) {
     joinedAt: e.joinedAt,
     calledAt: e.calledAt,
     recalledAt: e.recalledAt,
+    appointmentTime: e.appointmentTime,
     completedAt: e.completedAt,
     cancelledAt: e.cancelledAt,
     source: e.source,

@@ -2,7 +2,7 @@ import { render, screen } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
 import { describe, expect, it, vi } from 'vitest';
 import { ApiError, errorMessage, qs } from '../lib/api';
-import { clock, hourRange, minutes, statusLabelFor } from '../lib/format';
+import { clock, hourRange, minutes, statusLabelFor, time } from '../lib/format';
 import type { EntryView, QueueSnapshot } from '../lib/types';
 
 vi.mock('../hooks/useLive', () => ({ useSocketConnected: () => true }));
@@ -36,13 +36,14 @@ const snapshot: QueueSnapshot = {
   allowSameDayJoin: true,
   advanceBookingDays: 3,
   advanceBookingQuota: null,
+  bookingSlotMinutes: 30,
   pausedAt: null,
   updatedAt: new Date().toISOString(),
 };
 
 const entry = (over: Partial<EntryView> = {}): EntryView => ({
   queueId: 'q1',
-  entry: { id: 'e1', tokenLabel: 'QF-031', tokenNumber: 31, status: 'WAITING', priority: 'NORMAL', joinedAt: new Date().toISOString(), calledAt: null, recalledAt: null, completedAt: null, cancelledAt: null, source: 'SAME_DAY' },
+  entry: { id: 'e1', tokenLabel: 'QF-031', tokenNumber: 31, status: 'WAITING', priority: 'NORMAL', joinedAt: new Date().toISOString(), calledAt: null, recalledAt: null, appointmentTime: null, completedAt: null, cancelledAt: null, source: 'SAME_DAY' },
   currentToken: 'QF-024',
   patientsAhead: 6,
   estimatedWaitMinutes: 35,
@@ -106,7 +107,12 @@ describe('helpers', () => {
     expect(statusLabelFor({ status: 'SERVING' })).toBe('Called');
     expect(statusLabelFor({ status: 'SERVING', recalledAt: '2026-10-06T10:00:00Z' })).toBe('Recalled');
     expect(statusLabelFor({ status: 'SKIPPED' })).toBe('Missed');
-    expect(clock('17:30')).toMatch(/5:30\s?PM/i);
+    // Always 12-hour with AM/PM, whatever the phone language or 24-hour setting.
+    expect(clock('17:30')).toBe('5:30 PM');
+    expect(clock('09:05')).toBe('9:05 AM');
+    expect(clock('00:30')).toBe('12:30 AM');
+    expect(clock('12:00')).toBe('12:00 PM');
+    expect(time('2026-10-06T13:45:00')).toBe('1:45 PM');
   });
 
   it('builds query strings without empty values', () => {

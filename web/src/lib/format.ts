@@ -42,11 +42,17 @@ export const sourceLabel: Record<EntrySource, string> = {
 export const dayLabel = (isoDate: string) =>
   new Date(`${isoDate}T12:00:00`).toLocaleDateString([], { weekday: 'short', day: 'numeric', month: 'short' });
 
+/**
+ * Always 12-hour with AM/PM ("5:30 PM"). Browser locale formatting is avoided on purpose:
+ * phones set to 24-hour would otherwise drop AM/PM.
+ */
+export const twelveHour = (h: number, m: number) => `${h % 12 || 12}:${String(m).padStart(2, '0')} ${h < 12 ? 'AM' : 'PM'}`;
+
 /** "17:30" → "5:30 PM" */
 export function clock(hhmm: string | null | undefined) {
   if (!hhmm) return '—';
   const [h, m] = hhmm.split(':').map(Number);
-  return new Date(2000, 0, 1, h, m).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+  return twelveHour(h, m);
 }
 
 export const slotsLabel = (slots: { start: string; end: string }[]) =>
@@ -64,14 +70,17 @@ export function minutes(n: number | null | undefined) {
   return m ? `${h} h ${m} min` : `${h} h`;
 }
 
-export const time = (iso: string | null | undefined) =>
-  iso ? new Date(iso).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }) : '—';
+export const time = (iso: string | null | undefined) => {
+  if (!iso) return '—';
+  const d = new Date(iso);
+  return twelveHour(d.getHours(), d.getMinutes());
+};
 
 export const date = (iso: string | null | undefined) =>
   iso ? new Date(iso).toLocaleDateString([], { day: 'numeric', month: 'short', year: 'numeric' }) : '—';
 
 export const dateTime = (iso: string | null | undefined) =>
-  iso ? new Date(iso).toLocaleString([], { day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit' }) : '—';
+  iso ? `${new Date(iso).toLocaleDateString([], { day: 'numeric', month: 'short' })}, ${time(iso)}` : '—';
 
 export function relative(iso: string) {
   const diff = (Date.now() - new Date(iso).getTime()) / 1000;

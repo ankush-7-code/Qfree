@@ -36,7 +36,8 @@ export function QueueFormDialog({ open, onClose, onSaved, organizationId, queue,
     serviceId: queue?.service?.id ?? '',
     joinCutoffTime: queue?.closingRules.cutoffTime ?? '',
     allowSameDayJoin: queue?.allowSameDayJoin ?? true,
-    advanceBookingDays: String(queue?.advanceBookingDays ?? 3),
+    advanceBookingDays: String(queue?.advanceBookingDays ?? 7),
+    bookingSlotMinutes: String(queue?.bookingSlotMinutes ?? 30),
     advanceBookingQuota: queue?.advanceBookingQuota ? String(queue.advanceBookingQuota) : '',
   }));
   const set = (k: Exclude<keyof typeof f, 'allowSameDayJoin'>) => (e: { target: { value: string } }) => setF({ ...f, [k]: e.target.value });
@@ -55,6 +56,7 @@ export function QueueFormDialog({ open, onClose, onSaved, organizationId, queue,
         allowSameDayJoin: f.allowSameDayJoin,
         advanceBookingDays: Number(f.advanceBookingDays),
         advanceBookingQuota: f.advanceBookingQuota ? Number(f.advanceBookingQuota) : null,
+        bookingSlotMinutes: Number(f.bookingSlotMinutes),
       };
       return queue ? api.patch<QueueSnapshot>(`/queues/${queue.id}`, body) : api.post<QueueSnapshot>('/queues', { ...body, organizationId });
     },
@@ -118,7 +120,7 @@ export function QueueFormDialog({ open, onClose, onSaved, organizationId, queue,
           <Toggle checked={f.allowSameDayJoin} onChange={(v) => setF({ ...f, allowSameDayJoin: v })} label="Patients can join online on the day" />
           <div className="grid gap-4 sm:grid-cols-2">
             <Select label="Advance booking" value={f.advanceBookingDays} onChange={set('advanceBookingDays')}>
-              <option value="0">Off — same day only</option>
+              <option value="0">Off — no appointments</option>
               {[1, 2, 3, 4, 5, 7, 10, 14, 21, 30].map((d) => (
                 <option key={d} value={d}>
                   Up to {d} day{d === 1 ? '' : 's'} ahead
@@ -136,6 +138,13 @@ export function QueueFormDialog({ open, onClose, onSaved, organizationId, queue,
               hint="Keeps the remaining places for on-the-spot patients. Empty = up to the daily maximum."
             />
           </div>
+          <Select label="Appointment time slots" value={f.bookingSlotMinutes} onChange={set('bookingSlotMinutes')} disabled={f.advanceBookingDays === '0'} hint="Patients pick a slot; each slot holds as many patients as fit at your pace.">
+            {[15, 20, 30, 45, 60].map((m) => (
+              <option key={m} value={m}>
+                Every {m} minutes
+              </option>
+            ))}
+          </Select>
           <p className="text-sm text-ink-2">Reception can always add patients who are present (“Add patient” on the queue board).</p>
         </fieldset>
       </form>

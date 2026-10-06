@@ -140,7 +140,8 @@ patientRouter.get('/me/bookings', requireRole('PATIENT'), async (req, res) => {
       const before = await prisma.queueEntry.count({
         where: { queueId: b.queueId, sessionDate: b.sessionDate, tokenNumber: { lt: b.tokenNumber }, status: { not: 'CANCELLED' } },
       });
-      const { estimatedTime } = bookingEstimate(b.queue, b.sessionDate, before + 1);
+      // Bookings carry their chosen slot; older bookings fall back to a position-based estimate.
+      const estimatedTime = b.appointmentTime ?? bookingEstimate(b.queue, b.sessionDate, before + 1).estimatedTime;
       const { organization, doctor } = b.queue;
       return {
         entryId: b.id,

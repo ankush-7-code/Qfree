@@ -300,8 +300,10 @@ model Queue {
   joinCutoffTime       String?     @map("join_cutoff_time")
   /// Whether patients may join online on the consultation day.
   allowSameDayJoin     Boolean     @default(true) @map("allow_same_day_join")
-  /// How many days ahead patients may book (0 = no advance booking).
-  advanceBookingDays   Int         @default(0) @map("advance_booking_days")
+  /// How many days ahead patients may book (0 = booking off; today's later slots are always included when on).
+  advanceBookingDays   Int         @default(7) @map("advance_booking_days")
+  /// Length of the bookable time slots in minutes (15, 30 or 60).
+  bookingSlotMinutes   Int         @default(30) @map("booking_slot_minutes")
   /// Max places per day that can be booked in advance; null = up to `capacity`. Keeps room for on-the-spot patients.
   advanceBookingQuota  Int?        @map("advance_booking_quota")
   /// Per-session manual controls (reset when a new day's session opens).
@@ -349,6 +351,8 @@ model QueueEntry {
   calledAt            DateTime?   @map("called_at")
   /// Set when a missed patient is called again (status SERVING → shown as "Recalled").
   recalledAt          DateTime?   @map("recalled_at")
+  /// Chosen appointment slot start ("HH:MM", org-local) for bookings; orders the day's line by time.
+  appointmentTime     String?     @map("appointment_time")
   completedAt         DateTime?   @map("completed_at")
   cancelledAt         DateTime?   @map("cancelled_at")
   updatedAt           DateTime    @updatedAt @map("updated_at")

@@ -114,7 +114,7 @@ export function QueuePage() {
                   <>
                     {' '}
                     <a href="#book" className="font-semibold underline">
-                      Book a later day
+                      Book an appointment instead
                     </a>
                   </>
                 )}
