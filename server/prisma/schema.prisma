@@ -250,11 +250,13 @@ model Doctor {
 }
 
 model DoctorSchedule {
-  id        String @id @default(uuid()) @db.Uuid
-  doctorId  String @map("doctor_id") @db.Uuid
-  dayOfWeek Int    @map("day_of_week")
-  startTime String @map("start_time")
-  endTime   String @map("end_time")
+  id          String @id @default(uuid()) @db.Uuid
+  doctorId    String @map("doctor_id") @db.Uuid
+  dayOfWeek   Int    @map("day_of_week")
+  startTime   String @map("start_time")
+  endTime     String @map("end_time")
+  /// Patient limit for this consulting session, set by the doctor (null = no session limit).
+  maxPatients Int?   @map("max_patients")
 
   doctor Doctor @relation(fields: [doctorId], references: [id], onDelete: Cascade)
 

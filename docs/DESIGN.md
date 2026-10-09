@@ -257,8 +257,9 @@ Patient-facing status names: **Booked, Waiting, Called, Missed, Recalled, Comple
 3. Doctor unavailable?
 4. Stopped by the doctor?
 5. Daily limit (`capacity`) reached? Bookings, same-day and reception patients all count.
-6. Past the "stop accepting at" time (`joinCutoffTime`)?
-7. Online same-day joining turned off (`allowSameDayJoin`)?
+6. Current consulting session full? On the Schedule page the doctor can give each session its own patient limit (`doctor_schedules.max_patients`, e.g. Mon 9 AM–1 PM: 20). A patient belongs to the first session that hasn't ended at their slot or arrival time. A full session blocks same-day joins and its booking slots, and reception can add a patient over it only with an audited override.
+7. Past the "stop accepting at" time (`joinCutoffTime`)?
+8. Online same-day joining turned off (`allowSameDayJoin`)?
 
 The patient limit and the cutoff time are independent, and whichever is reached first stops new joins. The doctor can **stop new patients** (the queue keeps serving) or **reopen**. Reopening lifts today's time rule but never the patient limit (raise the limit instead). These manual flags reset when the next day's session opens. **Close for today** ends the session and can be undone by reopening the queue the same day.
 

@@ -2,6 +2,7 @@ import { Link } from 'react-router';
 import { BarChart3, BellRing, Clock, FlaskConical, Hospital, Search, ShieldCheck, Smartphone, Stethoscope, Users } from 'lucide-react';
 import { LinkButton } from '../../components/ui/Button';
 import { Indicator } from '../../components/queue/Status';
+import { LiveShowcase } from '../../components/queue/LiveShowcase';
 import { PlayCircle, Hourglass } from 'lucide-react';
 
 /** Illustrative preview of the live queue card (static sample data). */
@@ -87,7 +88,7 @@ export function Landing() {
             </div>
           </div>
           <div className="flex justify-center">
-            <PreviewCard />
+            <LiveShowcase fallback={<PreviewCard />} />
           </div>
         </div>
       </section>

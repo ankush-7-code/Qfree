@@ -30,6 +30,8 @@ import {
   bookingSlots,
   estimatedTimeForPosition,
   isAppointmentDue,
+  sessionIndexFor,
+  sessionRemaining,
   sortKeyForTime,
   toMinutesOfDay,
   twelveHour,
@@ -45,7 +47,7 @@ import {
   type JoinBlock,
   type PriorityLevel,
 } from './queue.logic.js';
-import { effectiveStatus, getMyEntry, isSessionCurrent, loadQueue, todayFor, type LoadedQueue } from './queue.state.js';
+import { currentSessionFull, effectiveStatus, getMyEntry, isSessionCurrent, loadQueue, sessionsWithLoad, todayFor, type LoadedQueue } from './queue.state.js';
 
 export const SYSTEM_ACTOR = null;
 type ActorId = string | null;
@@ -177,6 +179,10 @@ function requireActiveSession(queue: LoadedQueue, allowPaused = false) {
   if (status === 'PAUSED' && !allowPaused) throw conflict('The queue is paused. Resume it first.', 'QUEUE_PAUSED');
 }
 
+/** A day's entries with what's needed to place them in consulting sessions. */
+const dayEntries = (tx: Tx, queueId: string, sessionDate: string) =>
+  tx.queueEntry.findMany({ where: { queueId, sessionDate, status: { not: 'CANCELLED' } }, select: { appointmentTime: true, joinedAt: true, status: true } });
+
 /** Tokens issued for a day (bookings, same-day and reception), excluding cancelled ones. */
 const issuedFor = (tx: Tx, queueId: string, sessionDate: string) =>
   tx.queueEntry.count({ where: { queueId, sessionDate, status: { not: 'CANCELLED' } } });
@@ -187,6 +193,7 @@ const BLOCK_CODE: Record<JoinBlock, string> = {
   DOCTOR_UNAVAILABLE: 'DOCTOR_UNAVAILABLE',
   STOPPED_BY_DOCTOR: 'JOINS_STOPPED',
   FULL: 'QUEUE_FULL',
+  SESSION_FULL: 'SESSION_FULL',
   CUTOFF_PASSED: 'CUTOFF_PASSED',
   SAME_DAY_DISABLED: 'SAME_DAY_DISABLED',
 };
@@ -370,6 +377,7 @@ export async function joinQueue(queueId: string, userId: string) {
         cutoffTime: queue.joinCutoffTime,
         localTime: localParts(queue.organization.timezone).time,
         allowSameDayJoin: queue.allowSameDayJoin,
+        sessionFull: currentSessionFull(queue, await dayEntries(tx, queueId, queue.sessionDate!)),
       });
       if (block) throw joinBlocked(block);
 
@@ -611,6 +619,9 @@ export async function addWalkIn(queueId: string, actorId: ActorId, input: { full
     if (issued >= queue.capacity && !input.overrideLimit) {
       throw conflict(`Today's limit of ${queue.capacity} patients has been reached. Confirm to add over the limit.`, 'QUEUE_FULL');
     }
+    if (!input.overrideLimit && currentSessionFull(queue, await dayEntries(tx, queue.id, queue.sessionDate!))) {
+      throw conflict("The doctor's patient limit for this session has been reached. Confirm to add over the limit.", 'SESSION_FULL');
+    }
     const user = await tx.user.create({
       data: {
         email: `walkin-${crypto.randomUUID()}@walkin.qfree.local`,
@@ -667,13 +678,29 @@ async function bookedPerSlot(db: Tx | typeof prisma, queueId: string, dates: str
  * A day's consultation sessions and its bookable time slots with places left. Slots later today must
  * start at least BOOKING_LEAD_MINUTES ahead.
  */
-function slotsForDay(queue: LoadedQueue, date: string, today: string, nowLocal: string, booked: (date: string, start: string) => number) {
-  const sessions = dayAvailability(weekdayOf(date), queue.organization.hours, queue.doctor?.schedules ?? null);
+function slotsForDay(
+  queue: LoadedQueue,
+  date: string,
+  today: string,
+  nowLocal: string,
+  booked: (date: string, start: string) => number,
+  entriesOfDay: { appointmentTime: string | null; joinedAt: Date; status: string }[],
+) {
+  // Sessions carry the doctor's per-session patient limits; a slot can't exceed what its session has left.
+  const { sessions, load } = sessionsWithLoad(queue, date, entriesOfDay);
   const earliest = date === today ? toMinutesOfDay(nowLocal) + BOOKING_LEAD_MINUTES : -1;
   const slots = bookingSlots(sessions, queue.bookingSlotMinutes, queue.avgServiceSeconds)
     .filter((s) => toMinutesOfDay(s.start) >= earliest)
-    .map((s) => ({ ...s, remaining: Math.max(0, s.capacity - booked(date, s.start)) }));
-  return { sessions, slots };
+    .map((s) => {
+      const sessionLeft = sessionRemaining(sessions, load, sessionIndexFor(sessions, toMinutesOfDay(s.start)));
+      return { ...s, session: sessionIndexFor(sessions, toMinutesOfDay(s.start)), remaining: Math.max(0, Math.min(s.capacity - booked(date, s.start), sessionLeft)) };
+    });
+  // Places that can really be booked: per session, the free slot places capped by what the session has left.
+  const bookable = sessions.reduce((sum, _s, i) => {
+    const inSession = slots.filter((x) => x.session === i).reduce((n, x) => n + x.remaining, 0);
+    return sum + Math.min(inSession, sessionRemaining(sessions, load, i));
+  }, 0);
+  return { sessions, slots, bookable };
 }
 
 /** Bookable days, each with its time slots and the places left in every slot. */
@@ -691,6 +718,9 @@ export async function getBookingSlots(queueId: string, userId?: string) {
       })
     : [];
   const booked = await bookedPerSlot(prisma, queueId, dates);
+  const entriesByDate = dates.length
+    ? await prisma.queueEntry.findMany({ where: { queueId, sessionDate: { in: dates }, status: { not: 'CANCELLED' } }, select: { sessionDate: true, appointmentTime: true, joinedAt: true, status: true } })
+    : [];
   const patient = userId ? await prisma.patient.findUnique({ where: { userId }, select: { id: true } }) : null;
   const mine = patient
     ? await prisma.queueEntry.findMany({
@@ -702,7 +732,7 @@ export async function getBookingSlots(queueId: string, userId?: string) {
     const issued = counts.filter((c) => c.sessionDate === date).reduce((n, c) => n + c._count, 0);
     const advance = counts.find((c) => c.sessionDate === date && c.source === 'ADVANCE')?._count ?? 0;
     const dayLeft = Math.max(0, Math.min(queue.capacity - issued, queue.advanceBookingQuota === null ? Infinity : queue.advanceBookingQuota - advance));
-    const { sessions, slots } = slotsForDay(queue, date, today, nowLocal, booked);
+    const { sessions, slots, bookable } = slotsForDay(queue, date, today, nowLocal, booked, entriesByDate.filter((e) => e.sessionDate === date));
     const closedToday = date === today && todayClosed;
     const times = slots.map((s) => ({ start: s.start, end: s.end, remaining: closedToday ? 0 : Math.min(s.remaining, dayLeft) }));
     const open = times.filter((t) => t.remaining > 0);
@@ -720,7 +750,7 @@ export async function getBookingSlots(queueId: string, userId?: string) {
       slots: sessions,
       times,
       booked: issued,
-      remaining: Math.min(dayLeft, open.reduce((n, t) => n + t.remaining, 0)),
+      remaining: closedToday ? 0 : Math.min(dayLeft, bookable),
       nextEstimatedTime: open[0]?.start ?? null,
       available: !unavailable && queue.organization.isActive,
       unavailable,
@@ -781,7 +811,14 @@ export async function bookAppointment(queueId: string, userId: string, date: str
         }
       }
 
-      const { sessions, slots } = slotsForDay(queue, date, today, localParts(queue.organization.timezone).time, await bookedPerSlot(tx, queueId, [date]));
+      const { sessions, slots } = slotsForDay(
+        queue,
+        date,
+        today,
+        localParts(queue.organization.timezone).time,
+        await bookedPerSlot(tx, queueId, [date]),
+        await dayEntries(tx, queueId, date),
+      );
       if (!sessions.length) throw conflict('The doctor is not consulting on this day', 'NOT_CONSULTING');
       const chosen = time ? slots.find((s) => s.start === time) : slots.find((s) => s.remaining > 0);
       if (time && !chosen) throw conflict('That time is not available for booking. Please choose another time.', 'SLOT_UNAVAILABLE');

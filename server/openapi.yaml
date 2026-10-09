@@ -239,6 +239,8 @@ paths:
         - $ref: '#/components/parameters/page'
         - $ref: '#/components/parameters/pageSize'
       responses: { '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/Paged' } } } } }
+  /doctors/featured:
+    get: { tags: [Discovery], security: [], summary: Doctors for the home page (live queues first; all with next available time when none are live), responses: { '200': { description: '{ anyLive, items: [{ id, name, specialization, organization, live, queue, nextAvailable }] }' } } }
   /doctors/specializations:
     get: { tags: [Discovery], security: [], responses: { '200': { description: List of strings } } }
   /doctors/{id}:
@@ -423,7 +425,7 @@ paths:
   /doctors/me/availability:
     patch: { tags: [Doctors], requestBody: { required: true, content: { application/json: { schema: { type: object, required: [isAvailable], properties: { isAvailable: { type: boolean } } } } } }, responses: { '200': { description: OK } } }
   /doctors/me/schedule:
-    put: { tags: [Doctors], requestBody: { required: true, content: { application/json: { schema: { type: array, items: { type: object, properties: { dayOfWeek: { type: integer }, startTime: { type: string }, endTime: { type: string } } } } } } }, responses: { '200': { description: OK } } }
+    put: { tags: [Doctors], requestBody: { required: true, content: { application/json: { schema: { type: array, items: { type: object, properties: { dayOfWeek: { type: integer }, startTime: { type: string }, endTime: { type: string }, maxPatients: { type: [integer, 'null'], minimum: 1, description: Patient limit for this consulting session (null = none) } } } } } } }, responses: { '200': { description: OK }, '400': { description: Invalid times or overlapping sessions } } }
 
   # ───────── Organization management ─────────
   /organizations/mine/list:

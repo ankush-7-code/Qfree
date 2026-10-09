@@ -59,24 +59,27 @@ export function Login() {
             Create an account
           </Link>
         </p>
-        <div className="mt-6 rounded-xl bg-surface-2 p-4 text-sm">
-          <p className="font-semibold">Demo accounts (password: Password123)</p>
-          <div className="mt-2 flex flex-wrap gap-2">
-            {DEMO.map((d) => (
-              <button
-                key={d.email}
-                type="button"
-                className="rounded-lg border border-line bg-surface px-3 py-1.5 font-medium hover:border-brand"
-                onClick={() => {
-                  setEmail(d.email);
-                  setPassword('Password123');
-                }}
-              >
-                {d.label}
-              </button>
-            ))}
+        {/* Quick demo logins only when developing locally; never shown on the live website. */}
+        {import.meta.env.DEV && (
+          <div className="mt-6 rounded-xl bg-surface-2 p-4 text-sm">
+            <p className="font-semibold">Demo accounts (password: Password123) — local development only</p>
+            <div className="mt-2 flex flex-wrap gap-2">
+              {DEMO.map((d) => (
+                <button
+                  key={d.email}
+                  type="button"
+                  className="rounded-lg border border-line bg-surface px-3 py-1.5 font-medium hover:border-brand"
+                  onClick={() => {
+                    setEmail(d.email);
+                    setPassword('Password123');
+                  }}
+                >
+                  {d.label}
+                </button>
+              ))}
+            </div>
           </div>
-        </div>
+        )}
       </Card>
     </Page>
   );

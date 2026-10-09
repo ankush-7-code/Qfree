@@ -9,8 +9,13 @@ import {
   entryPhase,
   estimateWaitSeconds,
   JOIN_BLOCK_MESSAGE,
+  dayAvailability,
   sameDayJoinBlock,
+  sessionIndexFor,
+  sessionLoad,
+  sessionRemaining,
   toMinutesOfDay,
+  weekdayOf,
   orderWaiting,
   progressFraction,
   toMinutes,
@@ -27,7 +32,7 @@ const queueInclude = {
       specialization: true,
       isAvailable: true,
       user: { select: { id: true, fullName: true } },
-      schedules: { select: { dayOfWeek: true, startTime: true, endTime: true } },
+      schedules: { select: { dayOfWeek: true, startTime: true, endTime: true, maxPatients: true } },
     },
   },
   service: { select: { id: true, name: true, category: true } },
@@ -67,6 +72,30 @@ export type QueueState = Awaited<ReturnType<typeof loadQueueState>>;
 type StateEntry = QueueState['entries'][number];
 
 export const todayFor = (queue: { organization: { timezone: string } }) => localDate(queue.organization.timezone);
+
+type SessionQueue = Pick<LoadedQueue, 'doctor'> & { organization: Pick<LoadedQueue['organization'], 'hours' | 'timezone'> };
+
+/** Minute of the local day a patient belongs to: their booked slot, else when they joined. */
+export const entryMinute = (e: { appointmentTime: string | null; joinedAt: Date }, timezone: string) =>
+  toMinutesOfDay(e.appointmentTime ?? localParts(timezone, e.joinedAt).time);
+
+/** The day's consulting sessions (with the doctor's limits) and how many patients each already has. */
+export function sessionsWithLoad(queue: SessionQueue, date: string, entries: { appointmentTime: string | null; joinedAt: Date; status: string }[]) {
+  const sessions = dayAvailability(weekdayOf(date), queue.organization.hours, queue.doctor?.schedules ?? null);
+  const load = sessionLoad(
+    sessions,
+    entries.filter((e) => e.status !== 'CANCELLED').map((e) => entryMinute(e, queue.organization.timezone)),
+  );
+  return { sessions, load };
+}
+
+/** Whether the consulting session running now (or next up) has reached the doctor's limit. */
+export function currentSessionFull(queue: SessionQueue, todaysEntries: { appointmentTime: string | null; joinedAt: Date; status: string }[], now = new Date()) {
+  const { date, time } = localParts(queue.organization.timezone, now);
+  const { sessions, load } = sessionsWithLoad(queue, date, todaysEntries);
+  const i = sessionIndexFor(sessions, toMinutesOfDay(time));
+  return i >= 0 && sessionRemaining(sessions, load, i) <= 0;
+}
 
 export const isSessionCurrent = (queue: { sessionDate: string | null; organization: { timezone: string } }) =>
   queue.sessionDate !== null && queue.sessionDate === todayFor(queue);
@@ -121,6 +150,7 @@ export function buildSnapshot(state: QueueState) {
     cutoffTime: queue.joinCutoffTime,
     localTime: localParts(queue.organization.timezone, now).time,
     allowSameDayJoin: queue.allowSameDayJoin,
+    sessionFull: currentSessionFull(queue, entries, now),
   });
 
   return {

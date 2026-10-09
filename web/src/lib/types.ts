@@ -6,7 +6,7 @@ export type Priority = 'NORMAL' | 'PRIORITY' | 'EMERGENCY';
 export type Phase = 'YOUR_TURN' | 'NEXT' | 'APPROACHING' | 'WAITING' | 'DONE' | 'SKIPPED' | 'CANCELLED' | 'CLOSED';
 export type StaffRole = 'OWNER' | 'MANAGER' | 'RECEPTIONIST';
 export type EntrySource = 'SAME_DAY' | 'ADVANCE' | 'RECEPTION';
-export type JoinBlock = 'QUEUE_CLOSED' | 'ORG_INACTIVE' | 'DOCTOR_UNAVAILABLE' | 'STOPPED_BY_DOCTOR' | 'FULL' | 'CUTOFF_PASSED' | 'SAME_DAY_DISABLED';
+export type JoinBlock = 'QUEUE_CLOSED' | 'ORG_INACTIVE' | 'DOCTOR_UNAVAILABLE' | 'STOPPED_BY_DOCTOR' | 'FULL' | 'SESSION_FULL' | 'CUTOFF_PASSED' | 'SAME_DAY_DISABLED';
 export type ServiceCategory = 'CONSULTATION' | 'LAB_TEST' | 'DIAGNOSTIC' | 'PROCEDURE' | 'OTHER';
 
 export interface Me {

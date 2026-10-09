@@ -110,6 +110,7 @@ export type JoinBlock =
   | 'DOCTOR_UNAVAILABLE'
   | 'STOPPED_BY_DOCTOR' // manual "stop new patients"
   | 'FULL' // daily patient limit reached
+  | 'SESSION_FULL' // the doctor's limit for the current consulting session is reached
   | 'CUTOFF_PASSED' // after the "stop accepting at" time
   | 'SAME_DAY_DISABLED'; // online same-day joining switched off (reception can still add patients)
 
@@ -124,6 +125,8 @@ export interface JoinRuleInput {
   cutoffTime: string | null; // "HH:MM" local
   localTime: string; // "HH:MM" local now
   allowSameDayJoin: boolean;
+  /** The current consulting session has reached the doctor's limit for it. */
+  sessionFull?: boolean;
 }
 
 /**
@@ -137,6 +140,7 @@ export function sameDayJoinBlock(r: JoinRuleInput): JoinBlock | null {
   if (!r.doctorAvailable) return 'DOCTOR_UNAVAILABLE';
   if (r.joinsStopped) return 'STOPPED_BY_DOCTOR';
   if (r.issued >= r.capacity) return 'FULL';
+  if (r.sessionFull) return 'SESSION_FULL';
   if (r.cutoffTime && r.localTime >= r.cutoffTime && !r.joinsReopened) return 'CUTOFF_PASSED';
   if (!r.allowSameDayJoin) return 'SAME_DAY_DISABLED';
   return null;
@@ -148,6 +152,7 @@ export const JOIN_BLOCK_MESSAGE: Record<JoinBlock, string> = {
   DOCTOR_UNAVAILABLE: 'The doctor is currently unavailable.',
   STOPPED_BY_DOCTOR: 'The doctor has stopped taking new patients for today.',
   FULL: 'Today’s patient limit has been reached.',
+  SESSION_FULL: 'The doctor’s patient limit for this session has been reached. You can book a time in a later session.',
   CUTOFF_PASSED: 'New patients are no longer accepted for today.',
   SAME_DAY_DISABLED: 'Same-day online joining is not available for this queue. Please book in advance or ask at the reception.',
 };
@@ -170,6 +175,8 @@ export function bookableDates(today: string, days: number): string[] {
 export interface Slot {
   start: string; // "HH:MM"
   end: string;
+  /** Doctor's patient limit for this consulting session (null/undefined = no session limit). */
+  maxPatients?: number | null;
 }
 
 /**
@@ -179,7 +186,7 @@ export interface Slot {
 export function dayAvailability(
   dayOfWeek: number,
   orgHours: { dayOfWeek: number; openTime: string; closeTime: string; isClosed: boolean }[],
-  doctorSchedules: { dayOfWeek: number; startTime: string; endTime: string }[] | null,
+  doctorSchedules: { dayOfWeek: number; startTime: string; endTime: string; maxPatients?: number | null }[] | null,
 ): Slot[] {
   const org = orgHours.find((h) => h.dayOfWeek === dayOfWeek);
   if (!org || org.isClosed) return [];
@@ -187,10 +194,36 @@ export function dayAvailability(
     return doctorSchedules
       .filter((s) => s.dayOfWeek === dayOfWeek)
       .sort((a, b) => a.startTime.localeCompare(b.startTime))
-      .map((s) => ({ start: s.startTime, end: s.endTime }));
+      .map((s) => ({ start: s.startTime, end: s.endTime, maxPatients: s.maxPatients ?? null }));
   }
-  return [{ start: org.openTime, end: org.closeTime }];
+  return [{ start: org.openTime, end: org.closeTime, maxPatients: null }];
 }
+
+/**
+ * Which consulting session a patient belongs to, by their slot or arrival minute: the first session
+ * that hasn't ended yet (someone arriving before the morning session belongs to it), else the last.
+ */
+export function sessionIndexFor(sessions: Slot[], minuteOfDay: number): number {
+  if (!sessions.length) return -1;
+  const i = sessions.findIndex((s) => toMinutesOfDay(s.end) > minuteOfDay);
+  return i === -1 ? sessions.length - 1 : i;
+}
+
+/** Patients per session, from each patient's slot/arrival minute. */
+export function sessionLoad(sessions: Slot[], minutes: number[]): number[] {
+  const load = sessions.map(() => 0);
+  for (const m of minutes) {
+    const i = sessionIndexFor(sessions, m);
+    if (i >= 0) load[i]++;
+  }
+  return load;
+}
+
+/** Places left in a session (Infinity when the doctor set no limit for it). */
+export const sessionRemaining = (sessions: Slot[], load: number[], index: number) => {
+  const limit = sessions[index]?.maxPatients;
+  return limit ? Math.max(0, limit - (load[index] ?? 0)) : Infinity;
+};
 
 export const toMinutesOfDay = (hhmm: string) => Number(hhmm.slice(0, 2)) * 60 + Number(hhmm.slice(3, 5));
 export const fromMinutesOfDay = (m: number) => `${String(Math.floor(m / 60) % 24).padStart(2, '0')}:${String(Math.round(m % 60)).padStart(2, '0')}`;

@@ -1,5 +1,5 @@
 import { beforeAll, describe, expect, it } from 'vitest';
-import { api, makeAdmin, register, resetDb } from './helpers.js';
+import { api, makeAdmin, register, resetDb, setupOpenQueue } from './helpers.js';
 
 beforeAll(resetDb);
 
@@ -50,5 +50,18 @@ describe('doctor discovery', () => {
     const admin = await makeAdmin();
     await api().patch(`/api/admin/organizations/${org.body.id}`).set(admin.auth).send({ isActive: false }).expect(200);
     expect(names(await api().get('/api/doctors').query({ q: 'Suspended' }))).toEqual([]);
+  });
+});
+
+describe('home page showcase', () => {
+  it('lists doctors whose queue is live, with real queue numbers', async () => {
+    const { queueId } = await setupOpenQueue();
+    await api().post(`/api/queues/${queueId}/join`).set((await register()).auth).expect(201);
+    const res = await api().get('/api/doctors/featured');
+    expect(res.status).toBe(200);
+    expect(res.body.anyLive).toBe(true);
+    const mine = res.body.items.find((d: { queue: { id: string } }) => d.queue.id === queueId);
+    expect(mine).toMatchObject({ live: true, queue: { status: 'OPEN', waitingCount: 1 } });
+    expect(res.body.items.every((d: { live: boolean }) => d.live)).toBe(true);
   });
 });

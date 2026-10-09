@@ -64,6 +64,61 @@ doctorRouter.get('/', async (req, res) => {
   res.json(paged(items.map(flatten), total, q.page, q.pageSize));
 });
 
+/**
+ * Doctors for the home page showcase: those whose queue is open right now ("live"), with real queue
+ * numbers. When nobody is live, every doctor with a queue is returned with their next consulting time.
+ * Cached briefly so a busy home page doesn't recompute every queue on each visit.
+ */
+let featuredCache: { at: number; body: unknown } | null = null;
+doctorRouter.get('/featured', async (_req, res) => {
+  if (featuredCache && Date.now() - featuredCache.at < 15_000) {
+    res.json(featuredCache.body);
+    return;
+  }
+  const doctors = await prisma.doctor.findMany({
+    where: { user: { isActive: true }, organization: { isActive: true }, queues: { some: { isArchived: false } } },
+    select: {
+      id: true,
+      specialization: true,
+      user: { select: { fullName: true } },
+      schedules: { select: { dayOfWeek: true, startTime: true, endTime: true } },
+      organization: {
+        select: { id: true, name: true, city: true, timezone: true, hours: { select: { dayOfWeek: true, openTime: true, closeTime: true, isClosed: true } } },
+      },
+      queues: { where: { isArchived: false }, select: { id: true }, orderBy: { createdAt: 'asc' } },
+    },
+    take: 60,
+  });
+  const all = await Promise.all(
+    doctors.map(async (d) => {
+      const snapshots = await Promise.all(d.queues.map((q) => getSnapshot(q.id)));
+      const liveQueue = snapshots.find((s) => s.status !== 'CLOSED') ?? null;
+      const q = liveQueue ?? snapshots[0];
+      const org = d.organization!;
+      return {
+        id: d.id,
+        name: d.user.fullName,
+        specialization: d.specialization,
+        organization: { id: org.id, name: org.name, city: org.city },
+        live: !!liveQueue,
+        queue: {
+          id: q.id,
+          status: q.status,
+          currentToken: q.currentToken,
+          waitingCount: q.waitingCount,
+          estimatedWaitMinutes: q.estimatedWaitMinutes,
+          isAcceptingPatients: q.isAcceptingPatients,
+        },
+        nextAvailable: doctorAvailability(d.schedules, org.hours, org.timezone).next,
+      };
+    }),
+  );
+  const live = all.filter((d) => d.live);
+  const body = { anyLive: live.length > 0, items: live.length ? live : all };
+  featuredCache = { at: Date.now(), body };
+  res.json(body);
+});
+
 doctorRouter.get('/specializations', async (_req, res) => {
   const rows = await prisma.doctor.findMany({ distinct: ['specialization'], select: { specialization: true }, orderBy: { specialization: 'asc' } });
   res.json(rows.map((r) => r.specialization));
@@ -128,17 +183,31 @@ me.put('/schedule', async (req, res) => {
     z
       .array(
         z
-          .object({ dayOfWeek: z.number().int().min(0).max(6), startTime: hhmm, endTime: hhmm })
+          .object({
+            dayOfWeek: z.number().int().min(0).max(6),
+            startTime: hhmm,
+            endTime: hhmm,
+            // Patient limit for this consulting session, set by the doctor; null/omitted = no limit.
+            maxPatients: z.coerce.number().int().min(1).max(1000).nullable().optional(),
+          })
           .refine((s) => s.startTime < s.endTime, 'startTime must be before endTime'),
       )
-      .max(21),
+      .max(21)
+      .refine(
+        (all) =>
+          all.every((a, i) => all.every((b, j) => i === j || a.dayOfWeek !== b.dayOfWeek || a.endTime <= b.startTime || b.endTime <= a.startTime)),
+        'Sessions on the same day must not overlap',
+      ),
     req.body,
   );
   const d = await myDoctor(user.id);
   await prisma.$transaction([
     prisma.doctorSchedule.deleteMany({ where: { doctorId: d.id } }),
-    prisma.doctorSchedule.createMany({ data: rows.map((r) => ({ ...r, doctorId: d.id })) }),
+    prisma.doctorSchedule.createMany({ data: rows.map((r) => ({ ...r, maxPatients: r.maxPatients ?? null, doctorId: d.id })) }),
   ]);
+  await auditFrom(req, { action: 'doctor.schedule_update', entityType: 'doctor', entityId: d.id });
+  // Session limits affect whether the doctor's queues accept patients right now.
+  await Promise.all(d.queues.map((q) => publishQueue(q.id)));
   res.json(await prisma.doctorSchedule.findMany({ where: { doctorId: d.id }, orderBy: [{ dayOfWeek: 'asc' }, { startTime: 'asc' }] }));
 });
 

@@ -62,6 +62,45 @@ describe('closing rules', () => {
   });
 });
 
+describe('doctor’s per-session patient limit', () => {
+  it('is set on the schedule and applies to joins, reception and bookings', async () => {
+    const { queueId, doctor } = await setupOpenQueue();
+    const allDay = [0, 1, 2, 3, 4, 5, 6].map((d) => ({ dayOfWeek: d, startTime: '00:00', endTime: '23:59', maxPatients: 2 }));
+    const saved = await api().put('/api/doctors/me/schedule').set(doctor.auth).send(allDay);
+    expect(saved.status).toBe(200);
+    expect(saved.body[0]).toMatchObject({ startTime: '00:00', maxPatients: 2 });
+
+    await join(queueId, await register());
+    await join(queueId, await register());
+    expect((await join(queueId, await register())).body.error.code).toBe('SESSION_FULL');
+    expect((await api().get(`/api/queues/${queueId}`)).body).toMatchObject({ isAcceptingPatients: false, joinBlock: 'SESSION_FULL' });
+
+    const walkIn = await api().post(`/api/queues/${queueId}/walk-ins`).set(doctor.auth).send({ fullName: 'Ram Lal' });
+    expect(walkIn.body.error.code).toBe('SESSION_FULL');
+    await api().post(`/api/queues/${queueId}/walk-ins`).set(doctor.auth).send({ fullName: 'Ram Lal', overrideLimit: true }).expect(201);
+
+    // Tomorrow's session also holds 2: bookable places across all its slots add up to 2.
+    const tomorrow = (await api().get(`/api/queues/${queueId}/booking-slots`)).body.days[1];
+    expect(tomorrow.remaining).toBe(2);
+    const [a, b, c] = await Promise.all([register(), register(), register()]);
+    await book(queueId, a, tomorrow.date, '09:00').expect(201);
+    await book(queueId, b, tomorrow.date, '15:00').expect(201);
+    expect((await book(queueId, c, tomorrow.date, '18:00')).body.error.code).toBe('SLOT_FULL');
+  });
+
+  it('rejects overlapping sessions on the same day', async () => {
+    const { doctor } = await setupOpenQueue();
+    const res = await api()
+      .put('/api/doctors/me/schedule')
+      .set(doctor.auth)
+      .send([
+        { dayOfWeek: 1, startTime: '09:00', endTime: '13:00', maxPatients: 20 },
+        { dayOfWeek: 1, startTime: '12:00', endTime: '15:00', maxPatients: 10 },
+      ]);
+    expect(res.status).toBe(400);
+  });
+});
+
 describe('on-the-spot patients', () => {
   it('reception adds a patient without an account, even when online joining is off', async () => {
     const { queueId, doctor } = await setupOpenQueue();
@@ -221,7 +260,7 @@ describe('advance booking', () => {
     const me = (await api().get('/api/auth/me').set(doctor.auth)).body;
     const profile = (await api().get(`/api/doctors/${me.doctor.id}`)).body;
     expect(profile.availability.weekly).toHaveLength(7);
-    expect(profile.availability.todaySlots).toEqual([{ start: '00:00', end: '23:59' }]);
+    expect(profile.availability.todaySlots).toEqual([{ start: '00:00', end: '23:59', maxPatients: null }]);
     expect(profile.organization).toMatchObject({ city: 'Testville', timezone: TZ });
   });
 });

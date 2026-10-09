@@ -16,6 +16,9 @@ import {
   bookingSlots,
   sortKeyForTime,
   isAppointmentDue,
+  sessionIndexFor,
+  sessionLoad,
+  sessionRemaining,
   type JoinRuleInput,
   type Orderable,
 } from '../src/modules/queues/queue.logic.js';
@@ -127,12 +130,37 @@ describe('booking calendar', () => {
 
   it('uses the doctor timings on clinic days, the opening hours otherwise, and nothing when closed', () => {
     expect(dayAvailability(1, hours, schedules)).toEqual([
-      { start: '09:00', end: '12:00' },
-      { start: '17:00', end: '20:00' },
+      { start: '09:00', end: '12:00', maxPatients: null },
+      { start: '17:00', end: '20:00', maxPatients: null },
     ]);
     expect(dayAvailability(2, hours, schedules)).toEqual([]); // doctor not consulting on Tuesday
-    expect(dayAvailability(2, hours, null)).toEqual([{ start: '08:00', end: '20:00' }]);
+    expect(dayAvailability(2, hours, null)).toEqual([{ start: '08:00', end: '20:00', maxPatients: null }]);
     expect(dayAvailability(0, hours, null)).toEqual([]); // clinic closed on Sunday
+  });
+
+  it('assigns patients to consulting sessions and applies each session’s limit', () => {
+    const sessions = [
+      { start: '09:00', end: '13:00', maxPatients: 2 },
+      { start: '17:00', end: '21:00', maxPatients: null },
+    ];
+    const at = (hhmm: string) => Number(hhmm.slice(0, 2)) * 60 + Number(hhmm.slice(3));
+    expect(sessionIndexFor(sessions, at('08:30'))).toBe(0); // early arrival belongs to the morning session
+    expect(sessionIndexFor(sessions, at('12:59'))).toBe(0);
+    expect(sessionIndexFor(sessions, at('14:00'))).toBe(1); // between sessions → evening
+    expect(sessionIndexFor(sessions, at('22:00'))).toBe(1); // after the last session → last
+    const load = sessionLoad(sessions, [at('09:00'), at('10:30'), at('18:00')]);
+    expect(load).toEqual([2, 1]);
+    expect(sessionRemaining(sessions, load, 0)).toBe(0); // morning full
+    expect(sessionRemaining(sessions, load, 1)).toBe(Infinity); // evening has no limit
+  });
+
+  it('closes same-day joins when the current session is full', () => {
+    const base: JoinRuleInput = {
+      status: 'OPEN', orgActive: true, doctorAvailable: true, joinsStopped: false, joinsReopened: false,
+      capacity: 50, issued: 10, cutoffTime: null, localTime: '10:00', allowSameDayJoin: true,
+    };
+    expect(sameDayJoinBlock({ ...base, sessionFull: true })).toBe('SESSION_FULL');
+    expect(sameDayJoinBlock({ ...base, sessionFull: false })).toBeNull();
   });
 
   it('estimates the time of the Nth patient across the day’s slots', () => {
