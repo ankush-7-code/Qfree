@@ -9,7 +9,7 @@ const cookieFrom = (res: { headers: Record<string, unknown> }) =>
 
 describe('auth', () => {
   it('registers a patient with a patient profile and never returns the password hash', async () => {
-    const res = await api().post('/api/auth/register').send({ email: 'Asha@Example.com', password: 'Password123', fullName: 'Asha Rao' });
+    const res = await api().post('/api/auth/register').send({ email: 'Asha@Example.com', password: 'Password123', fullName: 'Asha Rao', phone: '98765 43210' });
     expect(res.status).toBe(201);
     expect(res.body.user).toMatchObject({ email: 'asha@example.com', role: 'PATIENT' });
     expect(res.body.user.patient).toBeTruthy();
@@ -18,7 +18,7 @@ describe('auth', () => {
   });
 
   it('rejects duplicate emails, weak passwords and admin self-registration', async () => {
-    const dup = await api().post('/api/auth/register').send({ email: 'asha@example.com', password: 'Password123', fullName: 'Dup' });
+    const dup = await api().post('/api/auth/register').send({ email: 'asha@example.com', password: 'Password123', fullName: 'Dup', phone: '98765 43219' });
     expect(dup.status).toBe(409);
     const weak = await api().post('/api/auth/register').send({ email: 'weak@example.com', password: 'short', fullName: 'Weak' });
     expect(weak.status).toBe(400);
@@ -79,5 +79,45 @@ describe('auth', () => {
     const cookie = cookieFrom(login)!;
     expect((await api().post('/api/auth/logout').set('Cookie', cookie)).status).toBe(204);
     expect((await api().post('/api/auth/refresh').set('Cookie', cookie)).status).toBe(401);
+  });
+});
+
+describe('contact numbers', () => {
+  const reg = (body: Record<string, unknown>) =>
+    api().post('/api/auth/register').send({ password: 'Password123', fullName: 'Phone Test', ...body });
+
+  it('requires a valid Indian mobile for patients and doctors, stored in one format', async () => {
+    const missing = await reg({ email: 'nophone@example.com' });
+    expect(missing.status).toBe(400);
+    expect(missing.body.error.details.fieldErrors.phone).toBeTruthy();
+    expect((await reg({ email: 'bad1@example.com', phone: '12345' })).status).toBe(400);
+    expect((await reg({ email: 'bad2@example.com', phone: '0191 245 0011' })).status).toBe(400); // landline is not a mobile
+    expect((await reg({ email: 'doc@phone.dev', role: 'DOCTOR', doctor: { specialization: 'ENT' } })).status).toBe(400);
+
+    for (const [email, phone] of [['ok1@example.com', '98765 43210'], ['ok2@example.com', '+91-98765-43211'], ['ok3@example.com', '09876543212']]) {
+      const ok = await reg({ email, phone });
+      expect(ok.status).toBe(201);
+      expect(ok.body.user.phone).toMatch(/^\+91 9876[5-6] 4321\d$/);
+    }
+  });
+
+  it('keeps the mobile optional for clinic staff accounts', async () => {
+    expect((await reg({ email: 'staff@example.com', role: 'ORG_ADMIN' })).status).toBe(201);
+  });
+
+  it('requires a contact number for laboratories and diagnostic centres, not for clinics', async () => {
+    const owner = await reg({ email: 'labowner@example.com', role: 'ORG_ADMIN' });
+    const auth = { Authorization: `Bearer ${owner.body.accessToken}` };
+    const base = { address: '7 MG Road', city: 'Jammu' };
+    expect((await api().post('/api/organizations').set(auth).send({ ...base, name: 'Lab A', type: 'LABORATORY' })).status).toBe(400);
+    expect((await api().post('/api/organizations').set(auth).send({ ...base, name: 'Diag A', type: 'DIAGNOSTIC_CENTER' })).status).toBe(400);
+    const lab = await api().post('/api/organizations').set(auth).send({ ...base, name: 'Lab B', type: 'LABORATORY', phone: '0191 245 0011' });
+    expect(lab.status).toBe(201);
+    expect(lab.body.phone).toBe('+91 1912450011');
+    expect((await api().post('/api/organizations').set(auth).send({ ...base, name: 'Clinic A', type: 'CLINIC' })).status).toBe(201);
+
+    // Renaming keeps the existing number; the timezone is not reset by a partial update.
+    const renamed = await api().patch(`/api/organizations/${lab.body.id}`).set(auth).send({ name: 'Lab B Renamed' });
+    expect(renamed.body).toMatchObject({ name: 'Lab B Renamed', phone: '+91 1912450011', timezone: 'Asia/Kolkata' });
   });
 });

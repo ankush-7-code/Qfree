@@ -54,7 +54,7 @@ export function Login() {
           </Button>
         </form>
         <p className="mt-6 text-center text-ink-2">
-          New to QFree?{' '}
+          New to QFreee?{' '}
           <Link to="/register" className="font-semibold text-brand hover:underline">
             Create an account
           </Link>
@@ -127,7 +127,7 @@ export function Register() {
   return (
     <Page narrow>
       <Card className="p-6 sm:p-8">
-        <h1 className="text-2xl font-bold">Create your QFree account</h1>
+        <h1 className="text-2xl font-bold">Create your QFreee account</h1>
         <p className="mt-1 text-ink-2">We only ask for what we need to manage your place in the queue.</p>
         <div className="mt-5">
           <Tabs value={role} onChange={setRole} options={[{ value: 'PATIENT', label: 'Patient' }, { value: 'DOCTOR', label: 'Doctor' }, { value: 'ORG_ADMIN', label: 'Clinic / Lab' }]} />
@@ -136,7 +136,16 @@ export function Register() {
           {error && <Alert>{error}</Alert>}
           <Input label="Full name" autoComplete="name" required minLength={2} value={form.fullName} onChange={set('fullName')} />
           <Input label="Email" type="email" autoComplete="email" required value={form.email} onChange={set('email')} />
-          <Input label="Mobile number (optional)" type="tel" autoComplete="tel" value={form.phone} onChange={set('phone')} hint="Used by clinic staff if they need to reach you." />
+          <Input
+            label={role === 'ORG_ADMIN' ? 'Mobile number (optional)' : 'Mobile number'}
+            type="tel"
+            inputMode="tel"
+            autoComplete="tel"
+            required={role !== 'ORG_ADMIN'}
+            value={form.phone}
+            onChange={set('phone')}
+            hint={role === 'DOCTOR' ? '10-digit mobile, e.g. 98765 43210. Shown to your clinic, not to patients.' : '10-digit mobile, e.g. 98765 43210. Used by the clinic if they need to reach you.'}
+          />
           <Input
             label="Password"
             type="password"

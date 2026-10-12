@@ -4,6 +4,7 @@
  */
 import type { OrganizationType, ServiceCategory } from '../src/generated/prisma/client.js';
 import { prisma } from '../src/lib/prisma.js';
+import { demoMobile } from './demo-upgrades.js';
 import { doctorSchedule, seedLiveSession, simulateHistory, TZ, week, type HistorySpec } from './demo-lib.js';
 
 interface DoctorDef {
@@ -117,7 +118,7 @@ export async function addRegionalDemo(opts: { passwordHash: string; clinicOwnerI
       if (await prisma.user.findUnique({ where: { email: d.email }, select: { id: true } })) continue;
       const user = await prisma.user.create({
         data: {
-          email: d.email, fullName: d.fullName, role: 'DOCTOR', passwordHash: opts.passwordHash,
+          email: d.email, fullName: d.fullName, role: 'DOCTOR', passwordHash: opts.passwordHash, phone: demoMobile(d.email),
           doctor: {
             create: {
               organizationId: org.id, specialization: d.specialization, qualification: d.qualification,

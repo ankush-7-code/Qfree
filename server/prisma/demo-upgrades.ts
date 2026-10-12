@@ -65,7 +65,30 @@ async function bookingsAndClosingRules() {
   return `booking enabled on ${queues.length} demo queues, ${booked} sample bookings`;
 }
 
+/** A stable, valid-looking demo mobile number derived from the email (demo accounts only). */
+export function demoMobile(email: string) {
+  let h = 0;
+  for (const c of email) h = (h * 31 + c.charCodeAt(0)) % 100000;
+  return `+91 98000 ${String(h).padStart(5, '0')}`;
+}
+
+/** Contact numbers became mandatory for doctors and laboratories: fill them in for the demo accounts. */
+async function demoPhones() {
+  const doctors = await prisma.user.findMany({ where: { role: 'DOCTOR', phone: null, email: { endsWith: '@qfree.dev' } }, select: { id: true, email: true } });
+  for (const d of doctors) await prisma.user.update({ where: { id: d.id }, data: { phone: demoMobile(d.email) } });
+  const labs = await prisma.organization.findMany({
+    where: {
+      phone: null,
+      type: { in: ['LABORATORY', 'DIAGNOSTIC_CENTER'] },
+      staff: { some: { staffRole: 'OWNER', user: { email: { in: DEMO_OWNERS } } } },
+    },
+    select: { id: true },
+  });
+  for (const [i, l] of labs.entries()) await prisma.organization.update({ where: { id: l.id }, data: { phone: `+91 20255300${String(11 + i).padStart(2, '0')}` } });
+  return `phones added for ${doctors.length} demo doctors and ${labs.length} demo labs`;
+}
+
 export async function applyDemoUpgrades() {
-  const done = await once('bookings-v1', bookingsAndClosingRules);
-  return done ? [done] : [];
+  const done = [await once('bookings-v1', bookingsAndClosingRules), await once('phones-v1', demoPhones)];
+  return done.filter((d): d is string => d !== null);
 }

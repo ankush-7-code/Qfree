@@ -217,13 +217,13 @@ export function OrgDoctors() {
   const toast = useToast();
   const ctx = useManagedOrg();
   const [open, setOpen] = useState(false);
-  const [f, setF] = useState({ email: '', fullName: '', password: '', specialization: '', qualification: '' });
+  const [f, setF] = useState({ email: '', fullName: '', phone: '', password: '', specialization: '', qualification: '' });
   const add = useMutation({
     mutationFn: () => api.post(`/organizations/${ctx.id}/doctors`, Object.fromEntries(Object.entries(f).filter(([, v]) => v))),
     onSuccess: () => {
       toast({ tone: 'success', title: 'Doctor added' });
       setOpen(false);
-      setF({ email: '', fullName: '', password: '', specialization: '', qualification: '' });
+      setF({ email: '', fullName: '', phone: '', password: '', specialization: '', qualification: '' });
       qc.invalidateQueries({ queryKey: orgKey(ctx.id) });
     },
   });
@@ -264,11 +264,12 @@ export function OrgDoctors() {
           <Dialog open={open} onClose={() => setOpen(false)} title="Add a doctor" footer={<Button type="submit" form="doc-form" loading={add.isPending}>Add doctor</Button>}>
             <form id="doc-form" onSubmit={(e: FormEvent) => (e.preventDefault(), add.mutate())} className="flex flex-col gap-4">
               {add.error && <Alert>{errorMessage(add.error)}</Alert>}
-              <Input label="Doctor's email" type="email" required value={f.email} onChange={set('email')} hint="If the doctor already has a QFree account, that's all we need." />
+              <Input label="Doctor's email" type="email" required value={f.email} onChange={set('email')} hint="If the doctor already has a QFreee account, that's all we need." />
               <details>
                 <summary className="cursor-pointer font-medium text-brand">Create a new doctor account instead</summary>
                 <div className="mt-3 flex flex-col gap-4">
                   <Input label="Full name" value={f.fullName} onChange={set('fullName')} />
+                  <Input label="Mobile number" type="tel" inputMode="tel" value={f.phone} onChange={set('phone')} hint="Required for a new doctor account. 10-digit mobile." />
                   <Input label="Temporary password" type="password" autoComplete="new-password" value={f.password} onChange={set('password')} hint="Share it securely; the doctor can change it later." />
                   <Input label="Specialization" value={f.specialization} onChange={set('specialization')} />
                   <Input label="Qualification" value={f.qualification} onChange={set('qualification')} />
@@ -419,7 +420,7 @@ export function OrgStaff() {
                 <option value="RECEPTIONIST">Receptionist — runs queues</option>
                 <option value="MANAGER">Manager — also edits doctors, services and hours</option>
               </Select>
-              <p className="text-sm text-ink-2">New to QFree? Also fill in:</p>
+              <p className="text-sm text-ink-2">New to QFreee? Also fill in:</p>
               <Input label="Full name" value={f.fullName} onChange={set('fullName')} />
               <Input label="Temporary password" type="password" autoComplete="new-password" value={f.password} onChange={set('password')} />
             </form>
@@ -578,6 +579,9 @@ export function OrgAnalytics() {
 
 type OrgForm = { name: string; type: OrgType; description: string; address: string; city: string; phone: string; email: string; timezone: string };
 
+/** Laboratories and diagnostic centres must publish a contact number. */
+const needsPhone = (type: OrgType) => type === 'LABORATORY' || type === 'DIAGNOSTIC_CENTER';
+
 // Suggested while typing; any other city can still be entered.
 const SUGGESTED_CITIES = ['Delhi', 'Jammu', 'Mumbai', 'Pune', 'Srinagar'];
 
@@ -604,7 +608,15 @@ function OrgFields({ f, set }: { f: OrgForm; set: (k: keyof OrgForm) => (e: { ta
       <div className="grid gap-4 sm:grid-cols-2">
         <Input label="City" required list="qf-cities" autoComplete="off" value={f.city} onChange={set('city')} />
         <Input label="Time zone" required value={f.timezone} onChange={set('timezone')} hint="e.g. Asia/Kolkata" />
-        <Input label="Phone" type="tel" value={f.phone} onChange={set('phone')} />
+        <Input
+          label={needsPhone(f.type) ? 'Contact number' : 'Contact number (optional)'}
+          type="tel"
+          inputMode="tel"
+          required={needsPhone(f.type)}
+          value={f.phone}
+          onChange={set('phone')}
+          hint={needsPhone(f.type) ? 'Required for laboratories and diagnostic centres. Mobile or landline with STD code.' : 'Mobile or landline with STD code.'}
+        />
         <Input label="Public email" type="email" value={f.email} onChange={set('email')} />
       </div>
     </>
@@ -639,7 +651,7 @@ export function OrgProfile() {
             <Card className="max-w-2xl">
               <form onSubmit={(e: FormEvent) => (e.preventDefault(), save.mutate(form))} className="flex flex-col gap-4">
                 {save.error && <Alert>{errorMessage(save.error)}</Alert>}
-                {org.isVerified ? <Badge tone="active">Verified by QFree</Badge> : <Badge tone="waiting">Awaiting verification</Badge>}
+                {org.isVerified ? <Badge tone="active">Verified by QFreee</Badge> : <Badge tone="waiting">Awaiting verification</Badge>}
                 <OrgFields f={form} set={set} />
                 <Button type="submit" loading={save.isPending}>
                   Save changes

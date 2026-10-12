@@ -6,6 +6,7 @@ import { hhmm, idParams, paged, pagination, parse, uuid } from '../../lib/valida
 import { auditFrom } from '../../lib/audit.js';
 import { authenticate, currentUser, optionalAuth, requireRole } from '../../middleware/auth.js';
 import { joinLimiter } from '../../middleware/rateLimit.js';
+import { mobileSchema } from '../../lib/phone.js';
 import { assertCanManageQueue, isOrgStaff, myDoctorId } from '../access.js';
 import { publishQueue } from '../../realtime/publish.js';
 import * as svc from './queue.service.js';
@@ -235,7 +236,7 @@ manage.post('/walk-ins', async (req, res) => {
   const body = parse(
     z.object({
       fullName: z.string().trim().min(2).max(100),
-      phone: z.string().trim().regex(/^\+?[0-9 ()-]{7,20}$/, 'Invalid phone number').optional(),
+      phone: mobileSchema.optional(), // optional at the desk (e.g. elderly without a phone), valid when given
       overrideLimit: z.boolean().optional(),
     }),
     req.body,

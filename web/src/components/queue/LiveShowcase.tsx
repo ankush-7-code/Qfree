@@ -79,9 +79,9 @@ export function LiveShowcase({ fallback }: { fallback: ReactNode }) {
       onFocus={() => setHovered(true)}
       onBlur={() => setHovered(false)}
     >
-      <div className="overflow-hidden rounded-3xl border-2 border-line bg-surface shadow-xl" aria-roledescription="carousel" aria-label="Doctors on QFree right now">
+      <div className="overflow-hidden rounded-3xl border-2 border-line bg-surface shadow-xl" aria-roledescription="carousel" aria-label="Doctors on QFreee right now">
         <div className="flex items-center justify-between bg-brand px-5 py-3 text-on-brand">
-          <span className="font-semibold">QFree — Live Queue</span>
+          <span className="font-semibold">QFreee — Live Queue</span>
           {data?.anyLive ? (
             <span className="flex items-center gap-1.5 text-sm">
               <span className="live-dot size-2 rounded-full bg-current" aria-hidden /> Live

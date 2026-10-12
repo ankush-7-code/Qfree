@@ -51,8 +51,8 @@ export function PublicLayout() {
       <footer className="border-t border-line bg-surface">
         <div className="mx-auto flex max-w-6xl flex-wrap items-center justify-between gap-4 px-4 py-8 text-sm text-muted">
           <Logo />
-          <p>QFree — Know your queue. Save your time.</p>
-          <p>© {new Date().getFullYear()} QFree. Patient data is kept to the minimum needed.</p>
+          <p>QFreee — Know your queue. Save your time.</p>
+          <p>© {new Date().getFullYear()} QFreee. Patient data is kept to the minimum needed.</p>
         </div>
       </footer>
     </div>

@@ -404,7 +404,7 @@ export function DoctorProfile() {
           <form onSubmit={(e: FormEvent) => (e.preventDefault(), save.mutate())} className="flex flex-col gap-4">
             {save.error && <Alert>{errorMessage(save.error)}</Alert>}
             <Input label="Full name" required value={form.fullName} onChange={set('fullName')} />
-            <Input label="Phone" type="tel" value={form.phone} onChange={set('phone')} />
+            <Input label="Mobile number" type="tel" inputMode="tel" required value={form.phone} onChange={set('phone')} hint="10-digit mobile, e.g. 98765 43210" />
             <Input label="Specialization" required value={form.specialization} onChange={set('specialization')} />
             <Input label="Qualification" value={form.qualification} onChange={set('qualification')} />
             <div className="grid gap-4 sm:grid-cols-2">

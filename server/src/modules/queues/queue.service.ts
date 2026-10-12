@@ -269,7 +269,7 @@ export async function openQueue(queueId: string, actorId: ActorId, opts: { overr
             userId: b.patient.userId,
             type: 'QUEUE_OPENED',
             title: `Today's queue is open — ${b.tokenLabel}`,
-            body: `${providerLabel(queue)} has started. Follow your position live in QFree.`,
+            body: `${providerLabel(queue)} has started. Follow your position live in QFreee.`,
             data: { queueId: queue.id, entryId: b.id },
           });
         }

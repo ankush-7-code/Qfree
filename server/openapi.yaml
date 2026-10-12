@@ -1,6 +1,6 @@
 openapi: 3.1.0
 info:
-  title: QFree API
+  title: QFreee API
   version: 1.0.0
   description: |
     Smart healthcare queue management and real-time waiting-time information.

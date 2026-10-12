@@ -33,7 +33,7 @@ export function onTokenChange(listener: (token: string | null) => void) {
 // retry. Writes are only sent once the server is known to be awake: a write that times out at the
 // proxy may still be executed after the server wakes, so resending it could duplicate it.
 
-const UNAVAILABLE_MESSAGE = 'The QFree server is not reachable right now. Please check your connection and try again.';
+const UNAVAILABLE_MESSAGE = 'The QFreee server is not reachable right now. Please check your connection and try again.';
 const AWAKE_WINDOW_MS = 4 * 60_000; // the server sleeps after 15 idle minutes
 const WAKE_TIMEOUT_MS = 180_000; // free hosting can take a couple of minutes to wake
 const BANNER_DELAY_MS = 1_500;
@@ -178,7 +178,7 @@ export async function request<T>(path: string, opts: RequestOptions = {}): Promi
     return undefined as T;
   }
   const body = await res.json().catch(() => null);
-  // No QFree error body means the reply came from the proxy or host, not the API itself.
+  // No QFreee error body means the reply came from the proxy or host, not the API itself.
   if (!res.ok && !body?.error) return retryRead();
   lastOkAt = Date.now();
   if (!res.ok) {
@@ -200,7 +200,8 @@ export function errorMessage(err: unknown): string {
   if (err instanceof ApiError) {
     const fields = (err.details as { fieldErrors?: Record<string, string[]> } | undefined)?.fieldErrors;
     const first = fields && Object.entries(fields).find(([, v]) => v?.length);
-    return first ? `${first[0]}: ${first[1][0]}` : err.message;
+    // Field messages are written for people ("Enter a valid 10-digit Indian mobile number"), so no field-name prefix.
+    return first ? first[1][0] : err.message;
   }
   if (err instanceof Error) return err.message.includes('fetch') ? UNAVAILABLE_MESSAGE : err.message;
   return 'Something went wrong';

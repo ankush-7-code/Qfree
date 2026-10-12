@@ -113,7 +113,8 @@ export function Search() {
   const cities = useQuery({ queryKey: ['cities'], queryFn: () => api.get<string[]>('/organizations/cities'), staleTime: 300_000 });
 
   const endpoint = { doctors: '/doctors', clinics: '/organizations', labs: '/organizations', services: '/services' }[kind];
-  const extra = kind === 'labs' ? { type: 'LABORATORY' } : kind === 'clinics' ? { type: 'CLINIC' } : {};
+  // "Diagnostic centres" covers laboratories and diagnostic/imaging centres.
+  const extra = kind === 'labs' ? { type: 'LABORATORY,DIAGNOSTIC_CENTER' } : kind === 'clinics' ? { type: 'CLINIC' } : {};
   const results = useQuery({
     queryKey: ['search', kind, dq, city, page],
     queryFn: () => api.get<Paged<unknown>>(endpoint, { q: dq, city, page, pageSize: 12, ...extra }),
@@ -151,7 +152,7 @@ export function Search() {
           options={[
             { value: 'doctors', label: <span className="flex items-center gap-2"><Stethoscope className="size-4" aria-hidden />Doctors</span> },
             { value: 'clinics', label: <span className="flex items-center gap-2"><Building2 className="size-4" aria-hidden />Clinics</span> },
-            { value: 'labs', label: <span className="flex items-center gap-2"><FlaskConical className="size-4" aria-hidden />Laboratories</span> },
+            { value: 'labs', label: <span className="flex items-center gap-2"><FlaskConical className="size-4" aria-hidden />Diagnostic centres</span> },
             { value: 'services', label: <span className="flex items-center gap-2"><TestTubes className="size-4" aria-hidden />Tests & services</span> },
           ]}
         />

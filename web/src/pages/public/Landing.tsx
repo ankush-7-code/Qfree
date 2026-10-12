@@ -16,7 +16,7 @@ function PreviewCard() {
   return (
     <div className="w-full max-w-sm overflow-hidden rounded-3xl border-2 border-line bg-surface shadow-xl" aria-label="Example of the live queue screen">
       <div className="flex items-center justify-between bg-brand px-5 py-3 text-on-brand">
-        <span className="font-semibold">QFree — Live Queue</span>
+        <span className="font-semibold">QFreee — Live Queue</span>
         <span className="flex items-center gap-1.5 text-sm">
           <span className="live-dot size-2 rounded-full bg-current" /> Live
         </span>
@@ -76,11 +76,14 @@ export function Landing() {
               <span className="text-brand">Save your time.</span>
             </h1>
             <p className="mt-4 max-w-xl text-lg text-ink-2">
-              QFree shows you exactly where you are in line at your doctor, clinic or laboratory — and how long until it's your turn. Wait at home, at work or at a café, not in a crowded room.
+              QFreee shows you exactly where you are in line at your doctor, clinic or laboratory — and how long until it's your turn. Wait at home, at work or at a café, not in a crowded room.
             </p>
             <div className="mt-8 flex flex-wrap gap-3">
               <LinkButton to="/search" size="lg" icon={<Search className="size-5" />}>
-                Find a doctor or lab
+                Find a doctor
+              </LinkButton>
+              <LinkButton to="/search?type=labs" size="lg" icon={<FlaskConical className="size-5" />}>
+                Find a Diagnostic Centre
               </LinkButton>
               <LinkButton to="/register?role=ORG_ADMIN" size="lg" variant="secondary">
                 I run a clinic
@@ -96,7 +99,7 @@ export function Landing() {
       <section className="mx-auto max-w-6xl px-4 py-14">
         <h2 className="text-center text-3xl font-bold">Patient → Queue → Provider</h2>
         <p className="mx-auto mt-2 max-w-2xl text-center text-ink-2">
-          You join and receive <strong>QF-031</strong>. The doctor serves QF-024, QF-025 … and as your turn nears, QFree lets you know.
+          You join and receive <strong>QF-031</strong>. The doctor serves QF-024, QF-025 … and as your turn nears, QFreee lets you know.
         </p>
         <div className="mt-10 grid gap-5 sm:grid-cols-2 lg:grid-cols-4">
           {features.map(({ icon: Icon, title, text }) => (

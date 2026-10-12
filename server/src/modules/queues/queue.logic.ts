@@ -148,7 +148,7 @@ export function sameDayJoinBlock(r: JoinRuleInput): JoinBlock | null {
 
 export const JOIN_BLOCK_MESSAGE: Record<JoinBlock, string> = {
   QUEUE_CLOSED: 'This queue is closed right now.',
-  ORG_INACTIVE: 'This provider is not accepting patients on QFree at the moment.',
+  ORG_INACTIVE: 'This provider is not accepting patients on QFreee at the moment.',
   DOCTOR_UNAVAILABLE: 'The doctor is currently unavailable.',
   STOPPED_BY_DOCTOR: 'The doctor has stopped taking new patients for today.',
   FULL: 'Today’s patient limit has been reached.',

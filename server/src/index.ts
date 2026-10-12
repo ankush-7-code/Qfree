@@ -22,7 +22,7 @@ async function housekeeping() {
 }
 
 server.listen(env.PORT, () => {
-  logger.info(`QFree API listening on http://localhost:${env.PORT} (docs: /api/docs)`);
+  logger.info(`QFreee API listening on http://localhost:${env.PORT} (docs: /api/docs)`);
   void housekeeping();
 });
 const timer = setInterval(housekeeping, env.HOUSEKEEPING_INTERVAL_MS);

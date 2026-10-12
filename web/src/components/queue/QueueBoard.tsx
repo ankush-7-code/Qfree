@@ -398,7 +398,7 @@ export function QueueBoard({ queueId, detailsBase }: { queueId: string; detailsB
         <form id="walk-in-form" onSubmit={submitWalkIn} className="flex flex-col gap-4">
           <p className="text-ink-2">For patients who are here in person — for example without a smartphone. They join at the end of today's line.</p>
           <Input label="Patient name" required minLength={2} maxLength={100} value={walkIn.fullName} onChange={(e) => setWalkIn({ ...walkIn, fullName: e.target.value })} />
-          <Input label="Mobile number (optional)" type="tel" value={walkIn.phone} onChange={(e) => setWalkIn({ ...walkIn, phone: e.target.value })} />
+          <Input label="Mobile number (optional)" type="tel" inputMode="tel" value={walkIn.phone} onChange={(e) => setWalkIn({ ...walkIn, phone: e.target.value })} hint="10-digit mobile, e.g. 98765 43210" />
           {walkIn.limitHit && (
             <Alert tone="waiting">
               Today's limit of {snapshot.capacity} patients has been reached.

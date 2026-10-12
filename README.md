@@ -1,4 +1,4 @@
-# QFree — Know Your Queue. Save Your Time.
+# QFreee — Know Your Queue. Save Your Time.
 
 A smart healthcare queue management and real-time waiting-time system for doctors, clinics, hospitals and laboratories.
 

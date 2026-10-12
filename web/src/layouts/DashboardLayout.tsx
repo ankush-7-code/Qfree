@@ -199,6 +199,15 @@ export function DashboardLayout() {
           </div>
         </header>
         <main id="main" className="mx-auto w-full max-w-6xl flex-1 px-4 py-6 sm:px-6">
+          {/* Mobile numbers became mandatory for patients and doctors; remind accounts created before that. */}
+          {!user.phone && (user.role === 'PATIENT' || user.role === 'DOCTOR') && location.pathname !== `/${user.role.toLowerCase()}/profile` && (
+            <div role="alert" className="mb-5 flex flex-wrap items-center justify-between gap-3 rounded-xl bg-st-waiting-soft px-4 py-3 text-st-waiting">
+              <span className="font-medium">Please add your mobile number so the clinic can reach you.</span>
+              <NavLink to={`/${user.role.toLowerCase()}/profile`} className="font-semibold underline">
+                Add mobile number
+              </NavLink>
+            </div>
+          )}
           <Outlet />
         </main>
       </div>

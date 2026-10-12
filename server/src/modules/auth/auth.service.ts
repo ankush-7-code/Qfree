@@ -5,6 +5,7 @@ import { prisma } from '../../lib/prisma.js';
 import { AppError, conflict, unauthorized } from '../../lib/errors.js';
 import { hashToken, newRefreshToken, signAccessToken } from '../../lib/tokens.js';
 import { audit } from '../../lib/audit.js';
+import { mobileSchema } from '../../lib/phone.js';
 
 const BCRYPT_COST = env.isTest ? 4 : 12;
 const REFRESH_RACE_GRACE_MS = 60_000;
@@ -23,11 +24,7 @@ export const registerSchema = z
     email: z.string().trim().toLowerCase().email().max(254),
     password: passwordSchema,
     fullName: z.string().trim().min(2).max(100),
-    phone: z
-      .string()
-      .trim()
-      .regex(/^\+?[0-9 ()-]{7,20}$/, 'Invalid phone number')
-      .optional(),
+    phone: mobileSchema.optional(),
     role: z.enum(['PATIENT', 'DOCTOR', 'ORG_ADMIN']).default('PATIENT'),
     doctor: z
       .object({
@@ -40,6 +37,11 @@ export const registerSchema = z
   .refine((d) => d.role !== 'DOCTOR' || !!d.doctor, {
     message: 'Doctor details (specialization) are required for doctor accounts',
     path: ['doctor'],
+  })
+  // Patients and doctors must give a mobile number so clinics can reach them.
+  .refine((d) => d.role === 'ORG_ADMIN' || !!d.phone, {
+    message: 'Mobile number is required',
+    path: ['phone'],
   });
 
 export const loginSchema = z.object({

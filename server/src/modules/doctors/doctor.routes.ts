@@ -8,6 +8,7 @@ import { authenticate, currentUser, requireRole } from '../../middleware/auth.js
 import { getSnapshot } from '../queues/queue.state.js';
 import { addDays, dayAvailability, weekdayOf } from '../queues/queue.logic.js';
 import { localParts } from '../../lib/time.js';
+import { mobileSchema } from '../../lib/phone.js';
 import { publishQueue } from '../../realtime/publish.js';
 
 export const doctorRouter = Router();
@@ -153,7 +154,7 @@ me.patch('/', async (req, res) => {
   const body = parse(
     z.object({
       fullName: z.string().trim().min(2).max(100).optional(),
-      phone: z.string().trim().regex(/^\+?[0-9 ()-]{7,20}$/).optional(),
+      phone: mobileSchema.optional(), // required for doctors: it can be changed, not removed
       specialization: z.string().trim().min(2).max(100).optional(),
       qualification: z.string().trim().max(200).optional(),
       experienceYears: z.coerce.number().int().min(0).max(70).optional(),

@@ -20,7 +20,7 @@ export function ServerWakeBanner() {
       <div className="flex max-w-lg items-center gap-3 rounded-2xl border border-line bg-surface px-4 py-3 shadow-lg">
         <Loader2 className="size-5 shrink-0 animate-spin text-brand" aria-hidden />
         <p>
-          <span className="font-semibold">Waking up the QFree server…</span>{' '}
+          <span className="font-semibold">Waking up the QFreee server…</span>{' '}
           <span className="text-ink-2">
             This can take a minute or two after a quiet period. Please keep this page open — it will continue by itself.
           </span>

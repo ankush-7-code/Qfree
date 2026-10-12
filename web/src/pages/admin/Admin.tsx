@@ -315,7 +315,7 @@ export function AdminServices() {
   const list = useAdminList<AdminService>('/admin/services');
   return (
     <div>
-      <PageHeader title="Services" subtitle="All tests and services offered across QFree." />
+      <PageHeader title="Services" subtitle="All tests and services offered across QFreee." />
       <ListCard
         list={list}
         head={['Service', 'Category', 'Provider', 'Duration', 'Price', 'Status']}

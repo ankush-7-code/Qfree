@@ -15,7 +15,7 @@ import { prisma } from '../src/lib/prisma.js';
 import { localDate } from '../src/lib/time.js';
 import { doctorSchedule, PASSWORD, pick, rand, seedLiveSession, simulateHistory, TZ, week } from './demo-lib.js';
 import { addRegionalDemo, addRegionalDemoToExisting } from './demo-regions.js';
-import { applyDemoUpgrades } from './demo-upgrades.js';
+import { applyDemoUpgrades, demoMobile } from './demo-upgrades.js';
 
 const FIRST = ['Aarav', 'Vivaan', 'Aditya', 'Ananya', 'Diya', 'Ishaan', 'Kavya', 'Rohan', 'Saanvi', 'Arjun', 'Meera', 'Kabir', 'Priya', 'Rahul', 'Sneha', 'Vikram', 'Neha', 'Aditi', 'Karan', 'Pooja'];
 const LAST = ['Verma', 'Gupta', 'Singh', 'Patel', 'Reddy', 'Nair', 'Joshi', 'Das', 'Kapoor', 'Menon', 'Rao', 'Bose', 'Chopra', 'Pillai'];
@@ -57,7 +57,7 @@ async function main() {
       return;
     }
   }
-  console.log('Seeding QFree demo data…');
+  console.log('Seeding QFreee demo data…');
   await wipe();
   const passwordHash = await bcrypt.hash(PASSWORD, 10);
   // On a public deployment the admin must not share the published demo password.
@@ -67,7 +67,7 @@ async function main() {
   const today = localDate(TZ, now);
 
   // ── Users ──
-  const admin = await prisma.user.create({ data: { email: 'admin@qfree.dev', fullName: 'QFree Administrator', role: 'ADMIN', passwordHash: adminHash } });
+  const admin = await prisma.user.create({ data: { email: 'admin@qfree.dev', fullName: 'QFreee Administrator', role: 'ADMIN', passwordHash: adminHash } });
   const clinicAdmin = await prisma.user.create({ data: { email: 'clinic@qfree.dev', fullName: 'Rekha Sharma', phone: '+91 98200 11111', role: 'ORG_ADMIN', passwordHash } });
   const labAdmin = await prisma.user.create({ data: { email: 'lab@qfree.dev', fullName: 'Suresh Kulkarni', phone: '+91 98200 22222', role: 'ORG_ADMIN', passwordHash } });
   const receptionist = await prisma.user.create({ data: { email: 'reception@qfree.dev', fullName: 'Anita Desai', role: 'ORG_ADMIN', passwordHash } });
@@ -118,7 +118,7 @@ async function main() {
   );
   const puneLab = await mkOrg(
     'Wellness Lab Pune', 'LABORATORY',
-    { address: '3 FC Road, Shivajinagar', city: 'Pune', description: 'Blood tests and health check-up packages.' },
+    { address: '3 FC Road, Shivajinagar', city: 'Pune', phone: '+91 2025530011', description: 'Blood tests and health check-up packages.' },
     week('07:00', '20:00'), labAdmin.id,
   );
 
@@ -126,7 +126,7 @@ async function main() {
   const mkDoctor = (email: string, fullName: string, orgId: string, specialization: string, qualification: string, experienceYears: number, consultationMinutes: number, bio: string) =>
     prisma.user.create({
       data: {
-        email, fullName, role: 'DOCTOR', passwordHash,
+        email, fullName, role: 'DOCTOR', passwordHash, phone: demoMobile(email),
         doctor: {
           create: {
             organizationId: orgId, specialization, qualification, experienceYears, consultationMinutes, bio,
@@ -199,7 +199,7 @@ async function main() {
 
   await prisma.notification.createMany({
     data: [
-      { userId: demoPatient.id, type: 'SYSTEM', title: 'Welcome to QFree', body: 'Find a doctor or lab, join the queue from your phone, and arrive just in time.', createdAt: new Date(now.getTime() - 3 * 86_400_000) },
+      { userId: demoPatient.id, type: 'SYSTEM', title: 'Welcome to QFreee', body: 'Find a doctor or lab, join the queue from your phone, and arrive just in time.', createdAt: new Date(now.getTime() - 3 * 86_400_000) },
       { userId: demoPatient.id, type: 'YOUR_TURN', title: "It's your turn — BL-012", body: 'Please proceed to Blood Collection Counter at PathCare Diagnostics now.', readAt: new Date(), createdAt: new Date(now.getTime() - 2 * 86_400_000) },
     ],
   });

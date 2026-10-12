@@ -7,13 +7,13 @@ export function About() {
   return (
     <Page>
       <div className="max-w-3xl">
-        <h1 className="text-3xl font-bold sm:text-4xl">About QFree</h1>
+        <h1 className="text-3xl font-bold sm:text-4xl">About QFreee</h1>
         <p className="mt-4 text-lg text-ink-2">
           Every day, patients spend hours in crowded waiting rooms without knowing where they stand. Elderly patients, parents with sick children and people who
           take time off work all pay for that uncertainty.
         </p>
         <p className="mt-4 text-lg text-ink-2">
-          QFree is a real-time queue system for doctors, clinics, hospitals and laboratories. Patients see the live queue before they travel, join with a
+          QFreee is a real-time queue system for doctors, clinics, hospitals and laboratories. Patients see the live queue before they travel, join with a
           digital token and follow their position from anywhere. Providers get a simple board to call patients, handle no-shows and emergencies fairly, and
           analytics to reduce waiting over time.
         </p>
@@ -46,14 +46,14 @@ const steps = [
   { icon: Search, title: 'Find your doctor or lab', text: 'Search by name, speciality, clinic, test or city. Every provider shows its live queue — who is being served and how long the wait is.' },
   { icon: Smartphone, title: 'Join the queue', text: 'Tap “Join queue” to get a digital token such as QF-031. You can join from home; there is no need to be at the clinic yet.' },
   { icon: ListOrdered, title: 'Watch your place move', text: 'Your screen shows the current token, your token, patients ahead and minutes left. It updates by itself — no refreshing.' },
-  { icon: BellRing, title: 'Get a nudge', text: 'When only a few patients are ahead, QFree alerts you (the screen flashes and your phone vibrates) so you can head over.' },
+  { icon: BellRing, title: 'Get a nudge', text: 'When only a few patients are ahead, QFreee alerts you (the screen flashes and your phone vibrates) so you can head over.' },
   { icon: Megaphone, title: 'It’s your turn', text: 'When the doctor calls you, you get a clear “It’s your turn” message. If you miss it, reception can put you back in line.' },
 ];
 
 export function HowItWorks() {
   return (
     <Page>
-      <h1 className="text-3xl font-bold sm:text-4xl">How QFree works</h1>
+      <h1 className="text-3xl font-bold sm:text-4xl">How QFreee works</h1>
       <p className="mt-2 max-w-2xl text-lg text-ink-2">Five simple steps. Designed so that anyone — including first-time smartphone users — understands their status in seconds.</p>
       <ol className="mt-8 grid gap-4">
         {steps.map(({ icon: Icon, title, text }, i) => (

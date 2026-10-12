@@ -79,7 +79,7 @@ export function LiveQueueCard({ snapshot, myEntry, onLeave, leaving, compact }: 
     >
       <header className="flex items-center justify-between gap-2 bg-brand px-5 py-3 text-on-brand">
         <h2 id={`live-${snapshot.id}`} className="font-semibold">
-          QFree — Live Queue
+          QFreee — Live Queue
         </h2>
         <span className="flex items-center gap-1.5 text-sm" aria-live="polite">
           {connected ? (

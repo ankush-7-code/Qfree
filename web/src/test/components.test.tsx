@@ -122,7 +122,7 @@ describe('helpers', () => {
 
   it('surfaces the first field-level validation error', () => {
     const err = new ApiError(400, 'VALIDATION_ERROR', 'Invalid request data', { fieldErrors: { password: ['Password must contain a number'] } });
-    expect(errorMessage(err)).toBe('password: Password must contain a number');
+    expect(errorMessage(err)).toBe('Password must contain a number');
     expect(errorMessage(new ApiError(409, 'QUEUE_FULL', 'This queue is full'))).toBe('This queue is full');
   });
 });

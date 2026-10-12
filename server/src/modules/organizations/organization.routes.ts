@@ -4,6 +4,7 @@ import { prisma } from '../../lib/prisma.js';
 import { badRequest, conflict, notFound } from '../../lib/errors.js';
 import { hhmm, idParams, paged, pagination, parse, uuid } from '../../lib/validate.js';
 import { isValidTimeZone } from '../../lib/time.js';
+import { contactPhoneSchema, mobileSchema, orgNeedsPhone } from '../../lib/phone.js';
 import { auditFrom } from '../../lib/audit.js';
 import { authenticate, currentUser, requireRole } from '../../middleware/auth.js';
 import { assertOrgStaff } from '../access.js';
@@ -29,7 +30,7 @@ const orgBody = z.object({
   description: z.string().trim().max(1000).optional(),
   address: z.string().trim().min(3).max(300),
   city: z.string().trim().min(2).max(80).transform(cityName),
-  phone: z.string().trim().regex(/^\+?[0-9 ()-]{7,20}$/).optional(),
+  phone: contactPhoneSchema.optional(), // required for laboratories and diagnostic centres (checked below)
   email: z.string().trim().toLowerCase().email().optional(),
   timezone: z.string().refine(isValidTimeZone, 'Unknown timezone').default('Asia/Kolkata'),
 });
@@ -59,10 +60,22 @@ const publicSelect = {
 // ─────────────── Public ───────────────
 
 organizationRouter.get('/', async (req, res) => {
-  const q = parse(pagination.extend({ q: z.string().trim().max(100).optional(), type: orgType.optional(), city: z.string().trim().max(80).optional() }), req.query);
+  const q = parse(
+    pagination.extend({
+      q: z.string().trim().max(100).optional(),
+      // One type or several, comma-separated (e.g. LABORATORY,DIAGNOSTIC_CENTER for "diagnostic centres").
+      type: z
+        .string()
+        .optional()
+        .transform((v) => (v ? v.split(',').map((t) => t.trim()) : undefined))
+        .pipe(z.array(orgType).min(1).optional()),
+      city: z.string().trim().max(80).optional(),
+    }),
+    req.query,
+  );
   const where = {
     isActive: true,
-    type: q.type,
+    ...(q.type ? { type: { in: q.type } } : {}),
     ...(q.city ? { city: { equals: q.city, mode: 'insensitive' as const } } : {}),
     ...(q.q
       ? {
@@ -131,6 +144,7 @@ organizationRouter.get('/mine/list', authenticate, async (req, res) => {
 organizationRouter.post('/', authenticate, requireRole('ORG_ADMIN', 'DOCTOR', 'ADMIN'), async (req, res) => {
   const user = currentUser(req);
   const body = parse(orgBody.extend({ hours: hoursBody.optional() }), req.body);
+  if (orgNeedsPhone(body.type) && !body.phone) throw phoneRequired();
   const org = await prisma.$transaction(async (tx) => {
     const created = await tx.organization.create({
       data: {
@@ -158,11 +172,22 @@ organizationRouter.post('/', authenticate, requireRole('ORG_ADMIN', 'DOCTOR', 'A
 organizationRouter.patch('/:id', authenticate, async (req, res) => {
   const { id } = parse(idParams, req.params);
   await assertOrgStaff(currentUser(req), id, ['OWNER', 'MANAGER']);
-  const body = parse(orgBody.partial(), req.body);
+  const parsed = parse(orgBody.partial(), req.body);
+  // Only fields that were sent: Zod would otherwise fill in defaults (e.g. reset the timezone).
+  const body = Object.fromEntries(Object.entries(parsed).filter(([k]) => k in (req.body ?? {}))) as Partial<typeof parsed>;
+  const existing = await prisma.organization.findUnique({ where: { id }, select: { type: true, phone: true } });
+  if (!existing) throw notFound('Organization');
+  if (orgNeedsPhone(body.type ?? existing.type) && !(body.phone ?? existing.phone)) throw phoneRequired();
   const org = await prisma.organization.update({ where: { id }, data: body });
   await auditFrom(req, { action: 'organization.update', entityType: 'organization', entityId: id, meta: body });
   res.json(org);
 });
+
+function phoneRequired() {
+  return badRequest('A contact number is required for laboratories and diagnostic centres', {
+    fieldErrors: { phone: ['A contact number is required for laboratories and diagnostic centres'] },
+  });
+}
 
 organizationRouter.get('/:id/manage', authenticate, async (req, res) => {
   const { id } = parse(idParams, req.params);
@@ -241,6 +266,7 @@ const doctorLinkBody = z.object({
   email: z.string().trim().toLowerCase().email(),
   fullName: z.string().trim().min(2).max(100).optional(),
   password: passwordSchema.optional(),
+  phone: mobileSchema.optional(),
   specialization: z.string().trim().min(2).max(100).optional(),
   qualification: z.string().trim().max(200).optional(),
   experienceYears: z.coerce.number().int().min(0).max(70).optional(),
@@ -262,14 +288,15 @@ organizationRouter.post('/:id/doctors', authenticate, async (req, res) => {
     doctorId = existing.doctor.id;
     await prisma.doctor.update({ where: { id: doctorId }, data: { organizationId: id } });
   } else {
-    if (!body.password || !body.fullName || !body.specialization) {
-      throw badRequest('No doctor with that email. Provide fullName, password and specialization to create one.');
+    if (!body.password || !body.fullName || !body.specialization || !body.phone) {
+      throw badRequest('No doctor with that email. Provide full name, mobile number, password and specialization to create one.');
     }
     const user = await prisma.user.create({
       data: {
         email: body.email,
         fullName: body.fullName,
         passwordHash: await hashPassword(body.password),
+        phone: body.phone,
         role: 'DOCTOR',
         doctor: {
           create: {

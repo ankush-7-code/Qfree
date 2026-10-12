@@ -6,6 +6,7 @@ import { idParams, paged, pagination, parse } from '../../lib/validate.js';
 import { auditFrom } from '../../lib/audit.js';
 import { authenticate, currentUser, requireRole } from '../../middleware/auth.js';
 import { getMyEntry } from '../queues/queue.state.js';
+import { mobileSchema } from '../../lib/phone.js';
 import { bookingEstimate } from '../queues/queue.service.js';
 
 export const patientRouter = Router();
@@ -32,7 +33,7 @@ patientRouter.patch('/me', requireRole('PATIENT'), async (req, res) => {
   const body = parse(
     z.object({
       fullName: z.string().trim().min(2).max(100).optional(),
-      phone: z.string().trim().regex(/^\+?[0-9 ()-]{7,20}$/).optional().nullable(),
+      phone: mobileSchema.optional(), // required for patients: it can be changed, not removed
       dateOfBirth: z.coerce.date().max(new Date()).optional().nullable(),
       gender: z.enum(['FEMALE', 'MALE', 'OTHER', 'PREFER_NOT_TO_SAY']).optional().nullable(),
     }),

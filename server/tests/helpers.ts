@@ -28,6 +28,8 @@ export async function register(role: 'PATIENT' | 'DOCTOR' | 'ORG_ADMIN' = 'PATIE
       email,
       password: 'Password123',
       fullName: `Test ${role}`,
+      // A unique valid mobile (required for patients and doctors).
+      phone: `9${String(counter++).padStart(9, '0')}`,
       role,
       ...(role === 'DOCTOR' ? { doctor: { specialization: 'General Physician' } } : {}),
       ...extra,

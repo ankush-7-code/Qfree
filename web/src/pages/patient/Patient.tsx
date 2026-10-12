@@ -267,7 +267,7 @@ export function PatientProfile() {
 
   const save = useMutation({
     mutationFn: (f: NonNullable<typeof current>) =>
-      api.patch('/patients/me', { fullName: f.fullName, phone: f.phone || null, dateOfBirth: f.dateOfBirth || null, gender: f.gender || null }),
+      api.patch('/patients/me', { fullName: f.fullName, phone: f.phone || undefined, dateOfBirth: f.dateOfBirth || null, gender: f.gender || null }),
     onSuccess: () => {
       toast({ tone: 'success', title: 'Profile saved' });
       reload();
@@ -280,7 +280,7 @@ export function PatientProfile() {
 
   return (
     <div>
-      <PageHeader title="Profile" subtitle="Keep this short — QFree only needs the basics." />
+      <PageHeader title="Profile" subtitle="Keep this short — QFreee only needs the basics." />
       <div className="grid gap-5 lg:grid-cols-2">
         <Card>
           <CardTitle>Your details</CardTitle>
@@ -288,7 +288,7 @@ export function PatientProfile() {
             {save.error && <Alert>{errorMessage(save.error)}</Alert>}
             <Input label="Full name" value={current.fullName} onChange={set('fullName')} required />
             <Input label="Email" value={data!.user.email} disabled hint="Contact support to change your email." />
-            <Input label="Mobile number" type="tel" value={current.phone} onChange={set('phone')} />
+            <Input label="Mobile number" type="tel" inputMode="tel" required value={current.phone} onChange={set('phone')} hint="10-digit mobile, e.g. 98765 43210" />
             <Input label="Date of birth (optional)" type="date" value={current.dateOfBirth} onChange={set('dateOfBirth')} hint="Helps the doctor; never shown publicly." />
             <Select label="Gender (optional)" value={current.gender} onChange={set('gender')}>
               <option value="">Not specified</option>

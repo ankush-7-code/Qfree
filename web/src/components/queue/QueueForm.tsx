@@ -102,7 +102,7 @@ export function QueueFormDialog({ open, onClose, onSaved, organizationId, queue,
         )}
         <div className="grid gap-4 sm:grid-cols-2">
           <Input label="Token prefix" required pattern="[A-Za-z]{1,4}" maxLength={4} value={f.tokenPrefix} onChange={set('tokenPrefix')} hint={`Tokens look like ${f.tokenPrefix.toUpperCase() || 'QF'}-001`} />
-          <Input label="Minutes per patient" type="number" min={1} max={60} step={0.5} required value={f.avgServiceMinutes} onChange={set('avgServiceMinutes')} hint="Starting estimate; QFree learns the real pace." />
+          <Input label="Minutes per patient" type="number" min={1} max={60} step={0.5} required value={f.avgServiceMinutes} onChange={set('avgServiceMinutes')} hint="Starting estimate; QFreee learns the real pace." />
           <Input label="Alert when this many are ahead" type="number" min={1} max={20} required value={f.approachingThreshold} onChange={set('approachingThreshold')} />
         </div>
 

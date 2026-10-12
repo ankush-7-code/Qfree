@@ -42,7 +42,7 @@ export function createApp() {
   });
 
   // Swagger UI needs inline scripts, so it gets a relaxed CSP of its own.
-  app.use('/api/docs', helmet({ contentSecurityPolicy: false }), swaggerUi.serve, swaggerUi.setup(openapi, { customSiteTitle: 'QFree API' }));
+  app.use('/api/docs', helmet({ contentSecurityPolicy: false }), swaggerUi.serve, swaggerUi.setup(openapi, { customSiteTitle: 'QFreee API' }));
   app.get('/api/openapi.json', (_req, res) => {
     res.json(openapi);
   });
