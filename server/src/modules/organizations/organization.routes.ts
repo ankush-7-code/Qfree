@@ -9,18 +9,10 @@ import { auditFrom } from '../../lib/audit.js';
 import { authenticate, currentUser, requireRole } from '../../middleware/auth.js';
 import { assertOrgStaff } from '../access.js';
 import { hashPassword, passwordSchema } from '../auth/auth.service.js';
+import { JK_DISTRICTS, jkDistrict } from '../../lib/districts.js';
 import { getSnapshot } from '../queues/queue.state.js';
 
 export const organizationRouter = Router();
-
-/** "jammu" → "Jammu", "new  delhi" → "New Delhi" (matches PostgreSQL initcap used in the data migration). */
-export function cityName(raw: string) {
-  return raw
-    .trim()
-    .replace(/\s+/g, ' ')
-    .toLowerCase()
-    .replace(/(^|[^a-z])([a-z])/g, (_m, sep: string, ch: string) => sep + ch.toUpperCase());
-}
 
 const orgType = z.enum(['CLINIC', 'LABORATORY', 'HOSPITAL', 'DIAGNOSTIC_CENTER']);
 
@@ -29,7 +21,10 @@ const orgBody = z.object({
   type: orgType,
   description: z.string().trim().max(1000).optional(),
   address: z.string().trim().min(3).max(300),
-  city: z.string().trim().min(2).max(80).transform(cityName),
+  city: z
+    .string()
+    .trim()
+    .transform((c, ctx) => jkDistrict(c) ?? (ctx.addIssue({ code: 'custom', message: 'Choose a district of Jammu & Kashmir' }), z.NEVER)),
   phone: contactPhoneSchema.optional(), // required for laboratories and diagnostic centres (checked below)
   email: z.string().trim().toLowerCase().email().optional(),
   timezone: z.string().refine(isValidTimeZone, 'Unknown timezone').default('Asia/Kolkata'),
@@ -100,10 +95,9 @@ organizationRouter.get('/', async (req, res) => {
   res.json(paged(items, total, q.page, q.pageSize));
 });
 
-organizationRouter.get('/cities', async (_req, res) => {
-  const rows = await prisma.organization.findMany({ where: { isActive: true }, distinct: ['city'], select: { city: true }, orderBy: { city: 'asc' } });
-  // One entry per city regardless of how it was typed.
-  res.json([...new Set(rows.map((r) => cityName(r.city)))].sort());
+// Every J&K district, so patients can filter by any of them (an empty district simply shows no results).
+organizationRouter.get('/cities', (_req, res) => {
+  res.json(JK_DISTRICTS);
 });
 
 organizationRouter.get('/:id', async (req, res) => {

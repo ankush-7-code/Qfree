@@ -7,6 +7,7 @@ import { prisma } from '../src/lib/prisma.js';
 import { bookAppointment } from '../src/modules/queues/queue.service.js';
 import { localDate } from '../src/lib/time.js';
 import { addDays, dayAvailability, weekdayOf } from '../src/modules/queues/queue.logic.js';
+import { JK_DISTRICTS } from '../src/lib/districts.js';
 import { TZ } from './demo-lib.js';
 
 const DEMO_OWNERS = ['clinic@qfree.dev', 'lab@qfree.dev'];
@@ -88,7 +89,13 @@ async function demoPhones() {
   return `phones added for ${doctors.length} demo doctors and ${labs.length} demo labs`;
 }
 
+/** QFreee now serves Jammu & Kashmir only: hide the demo providers outside its districts (kept, not deleted). */
+async function jkOnly() {
+  const { count } = await prisma.organization.updateMany({ where: { city: { notIn: JK_DISTRICTS }, isActive: true, staff: { some: { staffRole: 'OWNER', user: { email: { in: DEMO_OWNERS } } } } }, data: { isActive: false } });
+  return `hid ${count} providers outside Jammu & Kashmir`;
+}
+
 export async function applyDemoUpgrades() {
-  const done = [await once('bookings-v1', bookingsAndClosingRules), await once('phones-v1', demoPhones)];
+  const done = [await once('bookings-v1', bookingsAndClosingRules), await once('phones-v1', demoPhones), await once('jk-only-v1', jkOnly)];
   return done.filter((d): d is string => d !== null);
 }

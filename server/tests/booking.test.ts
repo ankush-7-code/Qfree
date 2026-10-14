@@ -261,6 +261,6 @@ describe('advance booking', () => {
     const profile = (await api().get(`/api/doctors/${me.doctor.id}`)).body;
     expect(profile.availability.weekly).toHaveLength(7);
     expect(profile.availability.todaySlots).toEqual([{ start: '00:00', end: '23:59', maxPatients: null }]);
-    expect(profile.organization).toMatchObject({ city: 'Testville', timezone: TZ });
+    expect(profile.organization).toMatchObject({ city: 'Jammu', timezone: TZ });
   });
 });

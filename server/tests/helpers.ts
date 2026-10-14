@@ -53,7 +53,7 @@ export async function setupOpenQueue(opts: { capacity?: number; hours?: typeof A
   const org = await api()
     .post('/api/organizations')
     .set(doctor.auth)
-    .send({ name: `Clinic ${unique()}`, type: 'CLINIC', address: '1 Test Street', city: 'Testville', hours: opts.hours ?? ALL_DAY });
+    .send({ name: `Clinic ${unique()}`, type: 'CLINIC', address: '1 Test Street', city: 'Jammu', hours: opts.hours ?? ALL_DAY });
   if (org.status !== 201) throw new Error(`org create failed: ${JSON.stringify(org.body)}`);
   const me = await api().get('/api/auth/me').set(doctor.auth);
   const queue = await api()

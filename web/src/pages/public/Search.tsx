@@ -5,6 +5,7 @@ import { BadgeCheck, Building2, FlaskConical, MapPin, Search as SearchIcon, Stet
 import { api } from '../../lib/api';
 import type { DoctorSummary, OrgSummary, Paged, Service } from '../../lib/types';
 import { categoryLabel, initials, orgTypeLabel } from '../../lib/format';
+import { JK_DISTRICTS } from '../../lib/districts';
 import { Badge, Card, EmptyState, ErrorState, inputClass, PageHeader, Pagination, Spinner, Tabs } from '../../components/ui/primitives';
 
 type Kind = 'doctors' | 'clinics' | 'labs' | 'services';
@@ -110,7 +111,6 @@ export function Search() {
     setParams(next, { replace: true });
   }, [kind, dq, city, setParams]);
 
-  const cities = useQuery({ queryKey: ['cities'], queryFn: () => api.get<string[]>('/organizations/cities'), staleTime: 300_000 });
 
   const endpoint = { doctors: '/doctors', clinics: '/organizations', labs: '/organizations', services: '/services' }[kind];
   // "Diagnostic centres" covers laboratories and diagnostic/imaging centres.
@@ -137,10 +137,10 @@ export function Search() {
             />
           </label>
           <label className="sm:w-56">
-            <span className="sr-only">City</span>
+            <span className="sr-only">District</span>
             <select className={inputClass} value={city} onChange={(e) => setCity(e.target.value)}>
-              <option value="">All cities</option>
-              {cities.data?.map((c) => (
+              <option value="">All districts</option>
+              {JK_DISTRICTS.map((c) => (
                 <option key={c}>{c}</option>
               ))}
             </select>
@@ -163,7 +163,7 @@ export function Search() {
       ) : results.error ? (
         <ErrorState error={results.error} retry={results.refetch} />
       ) : !results.data?.items.length ? (
-        <EmptyState title="No results">Try a different name, speciality or city.</EmptyState>
+        <EmptyState title="No results">Try a different name, speciality or district.</EmptyState>
       ) : (
         <>
           <p className="mb-3 text-ink-2" aria-live="polite">

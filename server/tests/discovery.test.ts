@@ -26,7 +26,7 @@ describe('doctor discovery', () => {
     expect(await api().get('/api/organizations/cities').then((r) => r.body)).toContain('Srinagar');
   });
 
-  it('stores one spelling per city, however it was typed', async () => {
+  it('only accepts Jammu & Kashmir districts, stored in one spelling', async () => {
     const doc = await register('DOCTOR', { fullName: 'Dr. Lowercase City' });
     const org = await api()
       .post('/api/organizations')
@@ -34,11 +34,18 @@ describe('doctor discovery', () => {
       .send({ name: 'Tawi Clinic', type: 'CLINIC', address: 'Gandhi Nagar', city: '  jammu ' })
       .expect(201);
     expect(org.body.city).toBe('Jammu');
-    const other = await register('DOCTOR', { fullName: 'Dr. Upper City' });
-    await api().post('/api/organizations').set(other.auth).send({ name: 'Capital Clinic', type: 'CLINIC', address: 'Connaught Place', city: 'NEW  DELHI' }).expect(201);
+
+    const other = await register('DOCTOR', { fullName: 'Dr. Outside JK' });
+    const outside = await api().post('/api/organizations').set(other.auth).send({ name: 'Capital Clinic', type: 'CLINIC', address: 'Connaught Place', city: 'New Delhi' });
+    expect(outside.status).toBe(400);
+    expect(outside.body.error.details.fieldErrors.city).toEqual(['Choose a district of Jammu & Kashmir']);
+    // Moving an existing clinic out of J&K is refused too.
+    expect((await api().patch(`/api/organizations/${org.body.id}`).set(doc.auth).send({ city: 'Pune' })).status).toBe(400);
+
     const cities = (await api().get('/api/organizations/cities')).body as string[];
-    expect(cities.filter((c) => c.toLowerCase() === 'jammu')).toEqual(['Jammu']);
-    expect(cities).toContain('New Delhi');
+    expect(cities).toHaveLength(20);
+    expect(cities).toEqual(expect.arrayContaining(['Anantnag', 'Jammu', 'Kishtwar', 'Kupwara', 'Srinagar', 'Udhampur']));
+    expect(cities).not.toContain('New Delhi');
   });
 
   it('hides doctors of suspended organizations', async () => {
@@ -46,7 +53,7 @@ describe('doctor discovery', () => {
     const org = await api()
       .post('/api/organizations')
       .set(doc.auth)
-      .send({ name: 'Closed Clinic', type: 'CLINIC', address: '1 Road', city: 'Delhi' });
+      .send({ name: 'Closed Clinic', type: 'CLINIC', address: '1 Road', city: 'Kathua' });
     const admin = await makeAdmin();
     await api().patch(`/api/admin/organizations/${org.body.id}`).set(admin.auth).send({ isActive: false }).expect(200);
     expect(names(await api().get('/api/doctors').query({ q: 'Suspended' }))).toEqual([]);

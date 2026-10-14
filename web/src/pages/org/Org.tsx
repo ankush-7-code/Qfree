@@ -15,6 +15,7 @@ import { QueueBoard } from '../../components/queue/QueueBoard';
 import { QueueFormDialog } from '../../components/queue/QueueForm';
 import { QueueTile } from '../../components/queue/QueueTile';
 import { AnalyticsPanel } from '../../components/charts/AnalyticsPanel';
+import { JK_DISTRICTS } from '../../lib/districts';
 import { QueueHistoryView } from '../doctor/Doctor';
 
 // ─── Current organization ───
@@ -582,19 +583,9 @@ type OrgForm = { name: string; type: OrgType; description: string; address: stri
 /** Laboratories and diagnostic centres must publish a contact number. */
 const needsPhone = (type: OrgType) => type === 'LABORATORY' || type === 'DIAGNOSTIC_CENTER';
 
-// Suggested while typing; any other city can still be entered.
-const SUGGESTED_CITIES = ['Delhi', 'Jammu', 'Mumbai', 'Pune', 'Srinagar'];
-
 function OrgFields({ f, set }: { f: OrgForm; set: (k: keyof OrgForm) => (e: { target: { value: string } }) => void }) {
-  const known = useQuery({ queryKey: ['cities'], queryFn: () => api.get<string[]>('/organizations/cities'), staleTime: 300_000 });
-  const cities = [...new Set([...SUGGESTED_CITIES, ...(known.data ?? [])])].sort();
   return (
     <>
-      <datalist id="qf-cities">
-        {cities.map((c) => (
-          <option key={c} value={c} />
-        ))}
-      </datalist>
       <Input label="Name" required minLength={2} value={f.name} onChange={set('name')} />
       <Select label="Type" value={f.type} onChange={set('type')}>
         {Object.entries(orgTypeLabel).map(([v, l]) => (
@@ -606,7 +597,16 @@ function OrgFields({ f, set }: { f: OrgForm; set: (k: keyof OrgForm) => (e: { ta
       <Textarea label="Description" value={f.description} onChange={set('description')} maxLength={1000} />
       <Input label="Address" required value={f.address} onChange={set('address')} />
       <div className="grid gap-4 sm:grid-cols-2">
-        <Input label="City" required list="qf-cities" autoComplete="off" value={f.city} onChange={set('city')} />
+        <Select label="District" required value={JK_DISTRICTS.includes(f.city) ? f.city : ''} onChange={set('city')} hint="QFreee serves Jammu & Kashmir.">
+          <option value="" disabled>
+            — Choose district —
+          </option>
+          {JK_DISTRICTS.map((d) => (
+            <option key={d} value={d}>
+              {d}
+            </option>
+          ))}
+        </Select>
         <Input label="Time zone" required value={f.timezone} onChange={set('timezone')} hint="e.g. Asia/Kolkata" />
         <Input
           label={needsPhone(f.type) ? 'Contact number' : 'Contact number (optional)'}
