@@ -22,8 +22,6 @@ const qid = (req: { params: unknown }) => parse(idParams, req.params).id;
 const queueFields = {
   doctorId: uuid.nullable(),
   serviceId: uuid.nullable(),
-  // Diagnostic centres pick a test by name ("X-Ray", or their own via "Others"); it becomes one of their services.
-  serviceName: z.string().trim().min(2, 'Please specify the service').max(120),
   name: z.string().trim().min(2).max(100),
   tokenPrefix: z
     .string()
@@ -47,7 +45,6 @@ const createQueueBody = z.object({
   organizationId: uuid,
   doctorId: queueFields.doctorId.optional(),
   serviceId: queueFields.serviceId.optional(),
-  serviceName: queueFields.serviceName.optional(),
   tokenPrefix: queueFields.tokenPrefix.default('QF'),
   capacity: queueFields.capacity.default(100),
   joinCutoffTime: queueFields.joinCutoffTime.optional(),
@@ -345,19 +342,6 @@ async function assertCanConfigure(userId: string, role: string, organizationId: 
   throw forbidden('Only organization managers (or the doctor for their own queue) can configure queues');
 }
 
-const LAB_TEST_NAMES = ['blood test', 'urine test', 'lab test'];
-
-/** Find the organization's service with this name (any letter case), or create it. */
-async function serviceIdFor(organizationId: string, name: string) {
-  const found = await prisma.service.findFirst({ where: { organizationId, name: { equals: name, mode: 'insensitive' } }, orderBy: { isActive: 'desc' } });
-  if (found) {
-    if (!found.isActive) await prisma.service.update({ where: { id: found.id }, data: { isActive: true } });
-    return found.id;
-  }
-  const category = LAB_TEST_NAMES.includes(name.toLowerCase()) ? 'LAB_TEST' : 'DIAGNOSTIC';
-  return (await prisma.service.create({ data: { organizationId, name, category } })).id;
-}
-
 async function assertProvidersBelong(organizationId: string, doctorId?: string | null, serviceId?: string | null) {
   if (doctorId) {
     const d = await prisma.doctor.findUnique({ where: { id: doctorId }, select: { organizationId: true } });
@@ -371,11 +355,10 @@ async function assertProvidersBelong(organizationId: string, doctorId?: string |
 
 queueRouter.post('/', authenticate, requireRole('DOCTOR', 'ORG_ADMIN', 'ADMIN'), async (req, res) => {
   const user = currentUser(req);
-  const { serviceName, ...body } = parse(createQueueBody, req.body);
-  if (!body.doctorId && !body.serviceId && !serviceName) throw badRequest('A queue must serve a doctor or a service');
+  const body = parse(createQueueBody, req.body);
+  if (!body.doctorId && !body.serviceId) throw badRequest('A queue must serve a doctor or a service');
   await assertCanConfigure(user.id, user.role, body.organizationId, body.doctorId);
   await assertProvidersBelong(body.organizationId, body.doctorId, body.serviceId);
-  if (serviceName && !body.serviceId) body.serviceId = await serviceIdFor(body.organizationId, serviceName);
   const queue = await prisma.queue.create({
     data: {
       organizationId: body.organizationId,
@@ -405,8 +388,7 @@ queueRouter.patch('/:id', authenticate, async (req, res) => {
   const body = parse(updateQueueBody, req.body);
   await assertCanConfigure(user.id, user.role, existing.organizationId, existing.doctorId);
   await assertProvidersBelong(existing.organizationId, body.doctorId, body.serviceId);
-  const { avgServiceMinutes, serviceName, ...fields } = body;
-  if (serviceName && !fields.serviceId) fields.serviceId = await serviceIdFor(existing.organizationId, serviceName);
+  const { avgServiceMinutes, ...fields } = body;
   await prisma.queue.update({
     where: { id },
     data: {

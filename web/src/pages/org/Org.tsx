@@ -159,7 +159,7 @@ export function OrgQueues() {
     <OrgPage>
       {(org) => (
         <div>
-          <PageHeader title="Queues" subtitle={org.type === 'LABORATORY' || org.type === 'DIAGNOSTIC_CENTER' ? 'One queue per test or service.' : 'One queue per doctor or service.'} actions={<Button icon={<Plus className="size-5" />} onClick={() => setEdit('new')}>New queue</Button>} />
+          <PageHeader title="Queues" subtitle="One queue per doctor or service." actions={<Button icon={<Plus className="size-5" />} onClick={() => setEdit('new')}>New queue</Button>} />
           {org.queues.length === 0 ? (
             <Card>
               <EmptyState title="No queues yet" />
@@ -190,7 +190,6 @@ export function OrgQueues() {
               queue={edit === 'new' ? undefined : edit}
               doctors={org.doctors.map((d) => ({ id: d.id, label: `${d.user.fullName} — ${d.specialization}` }))}
               services={org.services.filter((s) => s.isActive).map((s) => ({ id: s.id, label: s.name }))}
-              diagnostic={org.type === 'LABORATORY' || org.type === 'DIAGNOSTIC_CENTER'}
             />
           )}
         </div>

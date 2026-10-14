@@ -65,34 +65,3 @@ describe('home page showcase', () => {
     expect(res.body.items.every((d: { live: boolean }) => d.live)).toBe(true);
   });
 });
-
-describe('diagnostic centre queues', () => {
-  it('creates a queue for a test picked by name, reusing the service when it already exists', async () => {
-    const owner = await register('ORG_ADMIN');
-    const centre = await api()
-      .post('/api/organizations')
-      .set(owner.auth)
-      .send({ name: 'Scan Point', type: 'DIAGNOSTIC_CENTER', address: '3 Residency Road', city: 'Jammu', phone: '0191 247 1100' });
-    expect(centre.status).toBe(201);
-    const create = (serviceName: string, name: string) => api().post('/api/queues').set(owner.auth).send({ organizationId: centre.body.id, serviceName, name });
-
-    const xray = await create('X-Ray', 'X-Ray');
-    expect(xray.status).toBe(201);
-    expect(xray.body.doctor).toBeNull();
-    expect(xray.body.service.name).toBe('X-Ray');
-
-    // Same test in different letter case → same service; an "Others" entry becomes a new service.
-    const again = await create('x-ray', 'X-Ray (evening)');
-    expect(again.body.service.id).toBe(xray.body.service.id);
-    const other = await create('Mammography', 'Mammography');
-    expect(other.body.service.name).toBe('Mammography');
-
-    const services = (await api().get(`/api/organizations/${centre.body.id}`)).body.services.map((s: { name: string }) => s.name).sort();
-    expect(services).toEqual(['Mammography', 'X-Ray']);
-
-    // "Others" with nothing specified is rejected with a clear message.
-    const blank = await create(' ', 'Blank');
-    expect(blank.status).toBe(400);
-    expect(blank.body.error.details.fieldErrors.serviceName[0]).toBe('Please specify the service');
-  });
-});
