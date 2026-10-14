@@ -22,11 +22,22 @@ interface Props {
   services?: Option[];
   /** Fixed doctor (a doctor creating their own queue). */
   fixedDoctorId?: string;
+  /** Laboratory / diagnostic centre: no doctor, and the service is picked from common tests. */
+  diagnostic?: boolean;
 }
 
+const COMMON_TESTS = ['Ultrasound', 'X-Ray', 'Blood test', 'MRI', 'CT scan', 'EEG', 'ECG'];
+const OTHER = '__other__';
+
 /** Create or edit a queue: which doctor/service it serves, token prefix, capacity and expected pace. */
-export function QueueFormDialog({ open, onClose, onSaved, organizationId, queue, doctors = [], services = [], fixedDoctorId }: Props) {
+export function QueueFormDialog({ open, onClose, onSaved, organizationId, queue, doctors = [], services = [], fixedDoctorId, diagnostic }: Props) {
+  // Common tests first, then any other services the centre already offers.
+  const testOptions = [...COMMON_TESTS, ...services.map((s) => s.label).filter((n) => !COMMON_TESTS.some((t) => t.toLowerCase() === n.toLowerCase()))];
+  const currentTest = queue?.service?.name ?? '';
+  const knownTest = testOptions.find((t) => t.toLowerCase() === currentTest.toLowerCase());
   const [f, setF] = useState(() => ({
+    test: knownTest ?? (currentTest ? OTHER : ''),
+    otherTest: knownTest ? '' : currentTest,
     name: queue?.name ?? '',
     tokenPrefix: queue?.tokenPrefix ?? 'QF',
     capacity: String(queue?.capacity ?? 100),
@@ -50,8 +61,9 @@ export function QueueFormDialog({ open, onClose, onSaved, organizationId, queue,
         capacity: Number(f.capacity),
         avgServiceMinutes: Number(f.avgServiceMinutes),
         approachingThreshold: Number(f.approachingThreshold),
-        doctorId: f.doctorId || null,
-        serviceId: f.serviceId || null,
+        ...(diagnostic
+          ? { serviceName: f.test === OTHER ? f.otherTest.trim() : f.test }
+          : { doctorId: f.doctorId || null, serviceId: f.serviceId || null }),
         joinCutoffTime: f.joinCutoffTime || null,
         allowSameDayJoin: f.allowSameDayJoin,
         advanceBookingDays: Number(f.advanceBookingDays),
@@ -79,8 +91,30 @@ export function QueueFormDialog({ open, onClose, onSaved, organizationId, queue,
     >
       <form id="queue-form" onSubmit={(e: FormEvent) => (e.preventDefault(), save.mutate())} className="flex flex-col gap-4">
         {save.error && <Alert>{errorMessage(save.error)}</Alert>}
-        <Input label="Queue name" required minLength={2} value={f.name} onChange={set('name')} placeholder="e.g. General OPD — Dr. Sharma" />
-        {!fixedDoctorId && (
+        <Input label="Queue name" required minLength={2} value={f.name} onChange={set('name')} placeholder={diagnostic ? 'e.g. X-Ray' : 'e.g. General OPD — Dr. Sharma'} />
+        {diagnostic && (
+          <div className="grid gap-4 sm:grid-cols-2">
+            <Select
+              label="Service"
+              required
+              value={f.test}
+              // A new queue with no name yet is named after the chosen test.
+              onChange={(e) => setF({ ...f, test: e.target.value, name: f.name || (e.target.value === OTHER ? '' : e.target.value) })}
+            >
+              <option value="" disabled>
+                — Choose a service —
+              </option>
+              {testOptions.map((t) => (
+                <option key={t} value={t}>
+                  {t}
+                </option>
+              ))}
+              <option value={OTHER}>Others</option>
+            </Select>
+            {f.test === OTHER && <Input label="Please specify" required minLength={2} maxLength={120} value={f.otherTest} onChange={set('otherTest')} placeholder="e.g. Mammography" />}
+          </div>
+        )}
+        {!fixedDoctorId && !diagnostic && (
           <div className="grid gap-4 sm:grid-cols-2">
             <Select label="Doctor" value={f.doctorId} onChange={set('doctorId')}>
               <option value="">— None —</option>
