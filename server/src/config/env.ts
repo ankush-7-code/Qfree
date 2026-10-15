@@ -18,6 +18,11 @@ const schema = z.object({
   KEEP_ALIVE: z.enum(['true', 'false']).default('false').transform((v) => v === 'true'),
   KEEP_ALIVE_INTERVAL_MS: z.coerce.number().int().positive().default(10 * 60_000),
   RENDER_EXTERNAL_URL: z.string().url().optional(),
+  // Email (password reset links) is sent through Resend; without a key emails are only logged.
+  RESEND_API_KEY: z.string().optional(),
+  EMAIL_FROM: z.string().default('QFreee <no-reply@qfreee.com>'),
+  // Public website address used in links inside emails.
+  APP_URL: z.string().url().optional(),
 });
 
 const parsed = schema.safeParse(process.env);
@@ -30,5 +35,6 @@ export const env = {
   ...parsed.data,
   isProd: parsed.data.NODE_ENV === 'production',
   isTest: parsed.data.NODE_ENV === 'test',
+  appUrl: (parsed.data.APP_URL ?? (parsed.data.NODE_ENV === 'production' ? 'https://www.qfreee.com' : 'http://localhost:5173')).replace(/\/$/, ''),
   corsOrigins: parsed.data.CORS_ORIGINS.split(',').map((o) => o.trim()).filter(Boolean),
 };

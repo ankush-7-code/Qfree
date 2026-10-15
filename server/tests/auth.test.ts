@@ -1,6 +1,7 @@
 import { beforeAll, describe, expect, it } from 'vitest';
 import { prisma } from '../src/lib/prisma.js';
 import { api, register, resetDb } from './helpers.js';
+import { testOutbox } from '../src/lib/mailer.js';
 
 beforeAll(resetDb);
 
@@ -122,5 +123,46 @@ describe('contact numbers', () => {
     // Renaming keeps the existing number; the timezone is not reset by a partial update.
     const renamed = await api().patch(`/api/organizations/${lab.body.id}`).set(auth).send({ name: 'Lab B Renamed' });
     expect(renamed.body).toMatchObject({ name: 'Lab B Renamed', phone: '+91 1912450011', timezone: 'Asia/Kolkata' });
+  });
+});
+
+describe('forgot password', () => {
+  const linkToken = (text: string) => decodeURIComponent(/reset-password\?token=([^\s]+)/.exec(text)![1]);
+
+  it('emails a single-use link that sets a new password and signs out other sessions', async () => {
+    const user = await register('PATIENT');
+    testOutbox.length = 0;
+    const res = await api().post('/api/auth/forgot-password').send({ email: user.user.email.toUpperCase() });
+    expect(res.status).toBe(202);
+    expect(testOutbox).toHaveLength(1);
+    expect(testOutbox[0]).toMatchObject({ to: user.user.email, subject: 'Reset your QFreee password' });
+    const token = linkToken(testOutbox[0].text);
+
+    expect((await api().post('/api/auth/reset-password').send({ token, newPassword: 'short' })).status).toBe(400);
+    expect((await api().post('/api/auth/reset-password').send({ token, newPassword: 'NewPassword9' })).status).toBe(204);
+    // Used once only.
+    const again = await api().post('/api/auth/reset-password').send({ token, newPassword: 'Another123' });
+    expect(again.status).toBe(400);
+    expect(again.body.error.message).toMatch(/invalid or has expired/);
+
+    expect((await api().post('/api/auth/login').send({ email: user.user.email, password: 'Password123' })).status).toBe(401);
+    expect((await api().post('/api/auth/login').send({ email: user.user.email, password: 'NewPassword9' })).status).toBe(200);
+  });
+
+  it('gives the same answer for unknown emails and sends nothing', async () => {
+    testOutbox.length = 0;
+    const res = await api().post('/api/auth/forgot-password').send({ email: 'nobody@example.com' });
+    expect(res.status).toBe(202);
+    expect(testOutbox).toHaveLength(0);
+  });
+
+  it('only the newest link works, and at most 3 emails an hour are sent', async () => {
+    const user = await register('DOCTOR');
+    testOutbox.length = 0;
+    for (let i = 0; i < 5; i++) await api().post('/api/auth/forgot-password').send({ email: user.user.email }).expect(202);
+    expect(testOutbox).toHaveLength(3);
+    const [first, , last] = testOutbox.map((m) => linkToken(m.text));
+    expect((await api().post('/api/auth/reset-password').send({ token: first, newPassword: 'NewPassword9' })).status).toBe(400);
+    expect((await api().post('/api/auth/reset-password').send({ token: last, newPassword: 'NewPassword9' })).status).toBe(204);
   });
 });

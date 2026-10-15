@@ -16,6 +16,7 @@ import { QueueFormDialog } from '../../components/queue/QueueForm';
 import { QueueTile } from '../../components/queue/QueueTile';
 import { AnalyticsPanel } from '../../components/charts/AnalyticsPanel';
 import { JK_DISTRICTS } from '../../lib/districts';
+import { ChangePasswordCard } from '../shared/Shared';
 import { QueueHistoryView } from '../doctor/Doctor';
 
 // ─── Current organization ───
@@ -662,6 +663,9 @@ export function OrgProfile() {
               <LinkButton to="/org/setup" variant="ghost" icon={<Plus className="size-5" />}>
                 Add another branch
               </LinkButton>
+            </div>
+            <div className="mt-6 max-w-2xl">
+              <ChangePasswordCard />
             </div>
           </div>
         );

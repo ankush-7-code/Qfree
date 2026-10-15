@@ -2,10 +2,12 @@ import bcrypt from 'bcryptjs';
 import { z } from 'zod';
 import { env } from '../../config/env.js';
 import { prisma } from '../../lib/prisma.js';
-import { AppError, conflict, unauthorized } from '../../lib/errors.js';
+import { AppError, badRequest, conflict, unauthorized } from '../../lib/errors.js';
 import { hashToken, newRefreshToken, signAccessToken } from '../../lib/tokens.js';
 import { audit } from '../../lib/audit.js';
 import { mobileSchema } from '../../lib/phone.js';
+import { logger } from '../../lib/logger.js';
+import { sendEmail, simpleEmail } from '../../lib/mailer.js';
 
 const BCRYPT_COST = env.isTest ? 4 : 12;
 const REFRESH_RACE_GRACE_MS = 60_000;
@@ -170,4 +172,59 @@ export async function changePassword(userId: string, currentPassword: string, ne
     prisma.refreshToken.updateMany({ where: { userId, revokedAt: null }, data: { revokedAt: new Date() } }),
   ]);
   await audit({ actorId: userId, action: 'auth.password_changed', entityType: 'user', entityId: userId });
+}
+
+// ─── Forgot password ───
+
+const RESET_TTL_MS = 30 * 60_000;
+const RESETS_PER_HOUR = 3;
+
+export const forgotPasswordSchema = z.object({ email: z.string().trim().toLowerCase().email('Enter a valid email address') });
+export const resetPasswordSchema = z.object({ token: z.string().min(20).max(200), newPassword: passwordSchema });
+
+/**
+ * Email a single-use reset link if an active account has this address. The caller always gets the
+ * same answer, so the form cannot be used to find out who has an account.
+ */
+export async function requestPasswordReset(email: string) {
+  const user = await prisma.user.findUnique({ where: { email }, select: { id: true, fullName: true, email: true, isActive: true } });
+  if (!user?.isActive) return;
+  // Limit how many emails one address can receive.
+  const recent = await prisma.passwordReset.count({ where: { userId: user.id, createdAt: { gt: new Date(Date.now() - 3_600_000) } } });
+  if (recent >= RESETS_PER_HOUR) return;
+
+  const { token, hash } = newRefreshToken();
+  await prisma.$transaction([
+    // Only the newest link works.
+    prisma.passwordReset.updateMany({ where: { userId: user.id, usedAt: null }, data: { usedAt: new Date() } }),
+    prisma.passwordReset.create({ data: { userId: user.id, tokenHash: hash, expiresAt: new Date(Date.now() + RESET_TTL_MS) } }),
+  ]);
+  const url = `${env.appUrl}/reset-password?token=${encodeURIComponent(token)}`;
+  const { html, text } = simpleEmail({
+    greeting: `Hello ${user.fullName},`,
+    lines: ['We received a request to reset the password for your QFreee account.', 'Click the button below to choose a new password. The link works for 30 minutes and can be used once.'],
+    button: { label: 'Reset my password', url },
+    footer: "If you did not ask for this, you can ignore this email — your password stays the same.",
+  });
+  try {
+    await sendEmail({ to: user.email, subject: 'Reset your QFreee password', html, text });
+  } catch (err) {
+    logger.error({ err, userId: user.id }, 'Password reset email failed');
+  }
+  await audit({ actorId: user.id, action: 'auth.password_reset_requested', entityType: 'user', entityId: user.id });
+}
+
+export async function resetPassword(token: string, newPassword: string) {
+  const record = await prisma.passwordReset.findUnique({ where: { tokenHash: hashToken(token) }, include: { user: { select: { isActive: true } } } });
+  if (!record || record.usedAt || record.expiresAt < new Date() || !record.user.isActive) {
+    throw badRequest('This reset link is invalid or has expired. Please ask for a new one.');
+  }
+  const userId = record.userId;
+  await prisma.$transaction([
+    prisma.passwordReset.update({ where: { id: record.id }, data: { usedAt: new Date() } }),
+    prisma.user.update({ where: { id: userId }, data: { passwordHash: await hashPassword(newPassword) } }),
+    // Sign out everywhere: whoever knew the old password loses access.
+    prisma.refreshToken.updateMany({ where: { userId, revokedAt: null }, data: { revokedAt: new Date() } }),
+  ]);
+  await audit({ actorId: userId, action: 'auth.password_reset', entityType: 'user', entityId: userId });
 }

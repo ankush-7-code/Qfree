@@ -49,6 +49,19 @@ authRouter.post('/logout', async (req, res) => {
   res.status(204).end();
 });
 
+authRouter.post('/forgot-password', authLimiter, async (req, res) => {
+  const { email } = parse(auth.forgotPasswordSchema, req.body);
+  await auth.requestPasswordReset(email);
+  res.status(202).json({ message: 'If an account exists for this email, a reset link is on its way.' });
+});
+
+authRouter.post('/reset-password', authLimiter, async (req, res) => {
+  const body = parse(auth.resetPasswordSchema, req.body);
+  await auth.resetPassword(body.token, body.newPassword);
+  res.clearCookie(REFRESH_COOKIE, { ...cookieOptions(), maxAge: undefined });
+  res.status(204).end();
+});
+
 authRouter.get('/me', authenticate, async (req, res) => {
   res.json(await auth.getMe(currentUser(req).id));
 });

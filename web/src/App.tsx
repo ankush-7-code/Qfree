@@ -6,7 +6,7 @@ import { Spinner } from './components/ui/primitives';
 import { PublicLayout } from './layouts/PublicLayout';
 import { DashboardLayout } from './layouts/DashboardLayout';
 import { Landing } from './pages/public/Landing';
-import { Login, Register } from './pages/public/Auth';
+import { ForgotPassword, Login, Register, ResetPassword } from './pages/public/Auth';
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const lazyNamed = <M extends Record<K, React.ComponentType<any>>, K extends keyof M & string>(loader: () => Promise<M>, name: K) =>
@@ -95,6 +95,8 @@ export function App() {
           <Route path="how-it-works" element={<HowItWorks />} />
           <Route path="login" element={<Login />} />
           <Route path="register" element={<Register />} />
+          <Route path="forgot-password" element={<ForgotPassword />} />
+          <Route path="reset-password" element={<ResetPassword />} />
         </Route>
 
         <Route element={<AdaptiveLayout />}>
