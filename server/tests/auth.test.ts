@@ -101,12 +101,15 @@ describe('contact numbers', () => {
     }
   });
 
-  it('keeps the mobile optional for clinic staff accounts', async () => {
-    expect((await reg({ email: 'staff@example.com', role: 'ORG_ADMIN' })).status).toBe(201);
+  it('requires a mobile for clinic / lab accounts too', async () => {
+    const missing = await reg({ email: 'staff@example.com', role: 'ORG_ADMIN' });
+    expect(missing.status).toBe(400);
+    expect(missing.body.error.details.fieldErrors.phone).toEqual(['Mobile number is required']);
+    expect((await reg({ email: 'staff@example.com', role: 'ORG_ADMIN', phone: '94190 12345' })).status).toBe(201);
   });
 
   it('requires a contact number for laboratories and diagnostic centres, not for clinics', async () => {
-    const owner = await reg({ email: 'labowner@example.com', role: 'ORG_ADMIN' });
+    const owner = await reg({ email: 'labowner@example.com', role: 'ORG_ADMIN', phone: '94190 54321' });
     const auth = { Authorization: `Bearer ${owner.body.accessToken}` };
     const base = { address: '7 MG Road', city: 'Jammu' };
     expect((await api().post('/api/organizations').set(auth).send({ ...base, name: 'Lab A', type: 'LABORATORY' })).status).toBe(400);

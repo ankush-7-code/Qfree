@@ -38,8 +38,8 @@ export const registerSchema = z
     message: 'Doctor details (specialization) are required for doctor accounts',
     path: ['doctor'],
   })
-  // Patients and doctors must give a mobile number so clinics can reach them.
-  .refine((d) => d.role === 'ORG_ADMIN' || !!d.phone, {
+  // Everyone signing up gives a mobile number: clinics reach patients and doctors, QFreee reaches clinic/lab owners.
+  .refine((d) => !!d.phone, {
     message: 'Mobile number is required',
     path: ['phone'],
   });

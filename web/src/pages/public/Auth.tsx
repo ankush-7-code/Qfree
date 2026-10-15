@@ -137,14 +137,20 @@ export function Register() {
           <Input label="Full name" autoComplete="name" required minLength={2} value={form.fullName} onChange={set('fullName')} />
           <Input label="Email" type="email" autoComplete="email" required value={form.email} onChange={set('email')} />
           <Input
-            label={role === 'ORG_ADMIN' ? 'Mobile number (optional)' : 'Mobile number'}
+            label="Mobile number"
             type="tel"
             inputMode="tel"
             autoComplete="tel"
-            required={role !== 'ORG_ADMIN'}
+            required
             value={form.phone}
             onChange={set('phone')}
-            hint={role === 'DOCTOR' ? '10-digit mobile, e.g. 98765 43210. Shown to your clinic, not to patients.' : '10-digit mobile, e.g. 98765 43210. Used by the clinic if they need to reach you.'}
+            hint={
+              role === 'DOCTOR'
+                ? '10-digit mobile, e.g. 98765 43210. Shown to your clinic, not to patients.'
+                : role === 'ORG_ADMIN'
+                  ? '10-digit mobile, e.g. 98765 43210. Used by QFreee if we need to reach you.'
+                  : '10-digit mobile, e.g. 98765 43210. Used by the clinic if they need to reach you.'
+            }
           />
           <Input
             label="Password"
