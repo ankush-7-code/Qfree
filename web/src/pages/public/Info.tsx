@@ -1,4 +1,7 @@
-import { BellRing, ListOrdered, Megaphone, Search, ShieldCheck, Smartphone } from 'lucide-react';
+import { Link } from 'react-router';
+import { BellRing, ListOrdered, Mail, Megaphone, Search, ShieldCheck, Smartphone } from 'lucide-react';
+import { useAuth } from '../../lib/auth';
+import { SUPPORT_EMAIL, SUPPORT_MAILTO } from '../../lib/support';
 import { LinkButton } from '../../components/ui/Button';
 import { Card, EmptyState } from '../../components/ui/primitives';
 import { Page } from '../../layouts/PublicLayout';
@@ -94,6 +97,69 @@ export function NotFound() {
       <EmptyState title="Page not found" action={<LinkButton to="/">Go home</LinkButton>}>
         The page you were looking for does not exist or has moved.
       </EmptyState>
+    </Page>
+  );
+}
+
+const FAQ: { q: string; a: React.ReactNode }[] = [
+  {
+    q: 'I forgot my password',
+    a: (
+      <>
+        On the sign-in page tap <Link to="/forgot-password" className="font-semibold text-brand hover:underline">Forgot password?</Link>, enter your email and
+        follow the link we send you.
+      </>
+    ),
+  },
+  { q: 'How do I change my password?', a: 'Sign in and open your Profile (clinics and labs: the Organization page). Use the “Change password” box.' },
+  { q: 'How do I sign out?', a: 'Open the menu and tap “Sign out” at the bottom. On a phone, the menu is the ☰ button at the top left.' },
+  { q: 'How do I delete my account?', a: 'Sign in, open your Profile (clinics and labs: the Organization page) and use “Delete my account” at the bottom. This cannot be undone.' },
+  { q: 'I missed my turn', a: 'Tell the reception desk. They can put you back in the queue according to the clinic’s policy.' },
+  { q: 'I run a clinic — how do I add my doctors?', a: 'Sign in with your clinic account and open “Doctors”. You can add, edit, schedule and remove doctors there.' },
+];
+
+export function Help() {
+  const { user } = useAuth();
+  return (
+    <Page>
+      <div className="max-w-3xl">
+        <h1 className="text-3xl font-bold sm:text-4xl">Help &amp; support</h1>
+        <p className="mt-2 text-lg text-ink-2">We're here to help patients, doctors, clinics and laboratories.</p>
+
+        <Card className="mt-6">
+          <h2 className="flex items-center gap-2 text-lg font-semibold">
+            <Mail className="size-5 text-brand" aria-hidden /> Email us
+          </h2>
+          <p className="mt-2 text-ink-2">
+            Write to{' '}
+            <a href={SUPPORT_MAILTO} className="font-semibold text-brand hover:underline">
+              {SUPPORT_EMAIL}
+            </a>
+            . Please include the email or mobile number you signed up with, and for queue problems the clinic name and your token number. We usually reply within 1–2
+            working days.
+          </p>
+          <div className="mt-4 flex flex-wrap gap-3">
+            <a href={SUPPORT_MAILTO} className="inline-flex min-h-11 items-center gap-2 rounded-xl bg-brand px-4 font-semibold text-on-brand hover:bg-brand-strong">
+              <Mail className="size-5" aria-hidden /> Email support
+            </a>
+            {user && (
+              <LinkButton to="/report-issue" variant="secondary">
+                Report a problem in the app
+              </LinkButton>
+            )}
+          </div>
+        </Card>
+
+        <h2 className="mt-8 text-xl font-semibold">Common questions</h2>
+        <div className="mt-3 flex flex-col gap-3">
+          {FAQ.map(({ q, a }) => (
+            <details key={q} className="rounded-2xl border border-line bg-surface p-4">
+              <summary className="cursor-pointer font-semibold">{q}</summary>
+              <p className="mt-2 text-ink-2">{a}</p>
+            </details>
+          ))}
+        </div>
+      </div>
     </Page>
   );
 }

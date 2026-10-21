@@ -9,14 +9,15 @@ import { categoryLabel, DAYS, isoDay, minutes, orgTypeLabel, staffRoleLabel } fr
 import { useLiveSnapshots } from '../../hooks/useLive';
 import { Button, LinkButton } from '../../components/ui/Button';
 import { Dialog } from '../../components/ui/Dialog';
-import { Alert, Badge, Card, CardTitle, EmptyState, ErrorState, Input, inputClass, PageHeader, Select, Spinner, StatCard, Table, Td, Textarea } from '../../components/ui/primitives';
+import { Alert, Badge, Card, CardTitle, EmptyState, ErrorState, Input, inputClass, PageHeader, Select, Spinner, StatCard, Table, Tabs, Td, Textarea, Toggle } from '../../components/ui/primitives';
+import { ScheduleEditor, type Slot } from '../../components/doctor/ScheduleEditor';
 import { useToast } from '../../components/ui/Toast';
 import { QueueBoard } from '../../components/queue/QueueBoard';
 import { QueueFormDialog } from '../../components/queue/QueueForm';
 import { QueueTile } from '../../components/queue/QueueTile';
 import { AnalyticsPanel } from '../../components/charts/AnalyticsPanel';
 import { JK_DISTRICTS } from '../../lib/districts';
-import { ChangePasswordCard } from '../shared/Shared';
+import { ChangePasswordCard, DeleteAccountCard } from '../shared/Shared';
 import { QueueHistoryView } from '../doctor/Doctor';
 
 // ─── Current organization ───
@@ -214,74 +215,310 @@ export function OrgQueueBoard() {
 
 // ─── Doctors ───
 
+const emptyDoctor = { email: '', fullName: '', phone: '', password: '', specialization: '', qualification: '', experienceYears: '' };
+
 export function OrgDoctors() {
   const qc = useQueryClient();
   const toast = useToast();
   const ctx = useManagedOrg();
   const [open, setOpen] = useState(false);
-  const [f, setF] = useState({ email: '', fullName: '', phone: '', password: '', specialization: '', qualification: '' });
+  const [mode, setMode] = useState<'new' | 'existing'>('new');
+  const [f, setF] = useState(emptyDoctor);
   const add = useMutation({
-    mutationFn: () => api.post(`/organizations/${ctx.id}/doctors`, Object.fromEntries(Object.entries(f).filter(([, v]) => v))),
+    mutationFn: () => {
+      const body = mode === 'existing' ? { email: f.email } : { ...f, experienceYears: f.experienceYears ? Number(f.experienceYears) : undefined };
+      return api.post(`/organizations/${ctx.id}/doctors`, Object.fromEntries(Object.entries(body).filter(([, v]) => v !== '' && v !== undefined)));
+    },
     onSuccess: () => {
-      toast({ tone: 'success', title: 'Doctor added' });
+      toast({ tone: 'success', title: 'Doctor added', body: mode === 'new' ? 'Share the email and temporary password with the doctor.' : undefined });
       setOpen(false);
-      setF({ email: '', fullName: '', phone: '', password: '', specialization: '', qualification: '' });
+      setF(emptyDoctor);
       qc.invalidateQueries({ queryKey: orgKey(ctx.id) });
     },
   });
   const remove = useMutation({
     mutationFn: (doctorId: string) => api.del(`/organizations/${ctx.id}/doctors/${doctorId}`),
-    onSuccess: () => qc.invalidateQueries({ queryKey: orgKey(ctx.id) }),
+    onSuccess: () => {
+      toast({ tone: 'success', title: 'Doctor removed' });
+      qc.invalidateQueries({ queryKey: orgKey(ctx.id) });
+    },
     onError: (err) => toast({ tone: 'error', title: 'Could not remove doctor', body: errorMessage(err) }),
   });
   const set = (k: keyof typeof f) => (e: { target: { value: string } }) => setF({ ...f, [k]: e.target.value });
+  const openAdd = () => (add.reset(), setOpen(true));
 
   return (
     <OrgPage>
       {(org) => (
         <div>
-          <PageHeader title="Doctors" actions={<Button icon={<UserPlus className="size-5" />} onClick={() => setOpen(true)}>Add doctor</Button>} />
+          <PageHeader
+            title="Doctors"
+            subtitle={`Add, edit, schedule and remove the doctors of ${org.name}. Each doctor can have their own queue.`}
+            actions={<Button icon={<UserPlus className="size-5" />} onClick={openAdd}>Add doctor</Button>}
+          />
           <Card>
-            <Table head={['Doctor', 'Specialization', 'Experience', 'Status', '']} empty={!org.doctors.length}>
-              {org.doctors.map((d) => (
-                <tr key={d.id}>
-                  <Td>
-                    <Link to={`/doctors/${d.id}`} className="font-semibold hover:text-brand">
-                      {d.user.fullName}
-                    </Link>
-                    <span className="block text-sm text-muted">{d.user.email}</span>
-                  </Td>
-                  <Td>{d.specialization}</Td>
-                  <Td>{d.experienceYears} yrs</Td>
-                  <Td>{d.isAvailable ? <Badge tone="active">Available</Badge> : <Badge tone="paused">Unavailable</Badge>}</Td>
-                  <Td className="text-right">
-                    <Button size="sm" variant="ghost" onClick={() => confirm(`Remove ${d.user.fullName} from ${org.name}? Their queues will be archived.`) && remove.mutate(d.id)}>
-                      Remove
-                    </Button>
-                  </Td>
-                </tr>
-              ))}
-            </Table>
+            {org.doctors.length === 0 ? (
+              <EmptyState title="No doctors yet" action={<Button icon={<UserPlus className="size-5" />} onClick={openAdd}>Add your first doctor</Button>}>
+                Add the doctors who consult here. You can then create a queue for each of them.
+              </EmptyState>
+            ) : (
+              <Table head={['Doctor', 'Specialization', 'Queues', 'Status', '']}>
+                {org.doctors.map((d) => {
+                  const queues = org.queues.filter((q) => q.doctor?.id === d.id);
+                  return (
+                    <tr key={d.id}>
+                      <Td>
+                        <Link to={`/org/doctors/${d.id}`} className="font-semibold hover:text-brand">
+                          {d.user.fullName}
+                        </Link>
+                        <span className="block text-sm text-muted">
+                          {d.user.email}
+                          {d.user.phone ? ` · ${d.user.phone}` : ''}
+                        </span>
+                      </Td>
+                      <Td>
+                        {d.specialization}
+                        <span className="block text-sm text-muted">{d.experienceYears} yrs experience</span>
+                      </Td>
+                      <Td>{queues.length ? queues.map((q) => q.name).join(', ') : <span className="text-muted">None yet</span>}</Td>
+                      <Td>{d.isAvailable ? <Badge tone="active">Available</Badge> : <Badge tone="paused">Unavailable</Badge>}</Td>
+                      <Td className="text-right whitespace-nowrap">
+                        <LinkButton size="sm" variant="secondary" icon={<Pencil className="size-4" />} to={`/org/doctors/${d.id}`}>
+                          Manage
+                        </LinkButton>{' '}
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          icon={<Trash2 className="size-4" />}
+                          onClick={() => confirm(`Remove ${d.user.fullName} from ${org.name}? Their queues will be archived. Their QFreee account is not deleted.`) && remove.mutate(d.id)}
+                        >
+                          Remove
+                        </Button>
+                      </Td>
+                    </tr>
+                  );
+                })}
+              </Table>
+            )}
           </Card>
           <Dialog open={open} onClose={() => setOpen(false)} title="Add a doctor" footer={<Button type="submit" form="doc-form" loading={add.isPending}>Add doctor</Button>}>
             <form id="doc-form" onSubmit={(e: FormEvent) => (e.preventDefault(), add.mutate())} className="flex flex-col gap-4">
+              <Tabs
+                value={mode}
+                onChange={(m) => (setMode(m), add.reset())}
+                options={[
+                  { value: 'new', label: 'New doctor' },
+                  { value: 'existing', label: 'Already on QFreee' },
+                ]}
+              />
               {add.error && <Alert>{errorMessage(add.error)}</Alert>}
-              <Input label="Doctor's email" type="email" required value={f.email} onChange={set('email')} hint="If the doctor already has a QFreee account, that's all we need." />
-              <details>
-                <summary className="cursor-pointer font-medium text-brand">Create a new doctor account instead</summary>
-                <div className="mt-3 flex flex-col gap-4">
-                  <Input label="Full name" value={f.fullName} onChange={set('fullName')} />
-                  <Input label="Mobile number" type="tel" inputMode="tel" value={f.phone} onChange={set('phone')} hint="Required for a new doctor account. 10-digit mobile." />
-                  <Input label="Temporary password" type="password" autoComplete="new-password" value={f.password} onChange={set('password')} hint="Share it securely; the doctor can change it later." />
-                  <Input label="Specialization" value={f.specialization} onChange={set('specialization')} />
-                  <Input label="Qualification" value={f.qualification} onChange={set('qualification')} />
-                </div>
-              </details>
+              {mode === 'existing' ? (
+                <Input label="Doctor's email" type="email" required value={f.email} onChange={set('email')} hint="The email the doctor signed up to QFreee with." />
+              ) : (
+                <>
+                  <Input label="Full name" required minLength={2} value={f.fullName} onChange={set('fullName')} placeholder="e.g. Dr. Asha Koul" />
+                  <Input label="Email" type="email" required value={f.email} onChange={set('email')} hint="The doctor signs in with this email." />
+                  <Input label="Mobile number" type="tel" inputMode="tel" required value={f.phone} onChange={set('phone')} hint="10-digit mobile, e.g. 98765 43210" />
+                  <Input
+                    label="Temporary password"
+                    type="password"
+                    autoComplete="new-password"
+                    required
+                    minLength={8}
+                    value={f.password}
+                    onChange={set('password')}
+                    hint="At least 8 characters with a letter and a number. Share it with the doctor; they can change it later."
+                  />
+                  <Input label="Specialization" required minLength={2} value={f.specialization} onChange={set('specialization')} placeholder="e.g. General Physician" />
+                  <div className="grid gap-4 sm:grid-cols-2">
+                    <Input label="Qualification" value={f.qualification} onChange={set('qualification')} placeholder="e.g. MBBS, MD" />
+                    <Input label="Years of experience" type="number" min={0} max={70} value={f.experienceYears} onChange={set('experienceYears')} />
+                  </div>
+                </>
+              )}
             </form>
           </Dialog>
         </div>
       )}
     </OrgPage>
+  );
+}
+
+interface ClinicDoctor {
+  id: string;
+  specialization: string;
+  qualification: string | null;
+  experienceYears: number;
+  consultationMinutes: number;
+  bio: string | null;
+  isAvailable: boolean;
+  user: { fullName: string; email: string; phone: string | null };
+  schedules: Slot[];
+  queues: { id: string; name: string; status: string }[];
+}
+
+/** One doctor of the clinic: details, availability, weekly schedule, queues. */
+export function OrgDoctorManage() {
+  const { doctorId } = useParams();
+  const ctx = useManagedOrg();
+  const qc = useQueryClient();
+  const toast = useToast();
+  const navigate = useNavigate();
+  const key = ['org', ctx.id, 'doctor', doctorId];
+  const q = useQuery({ queryKey: key, queryFn: () => api.get<ClinicDoctor>(`/organizations/${ctx.id}/doctors/${doctorId}`), enabled: !!ctx.id });
+  const [f, setF] = useState<Record<string, string> | null>(null);
+  const [slots, setSlots] = useState<Slot[] | null>(null);
+  const refresh = () => {
+    qc.invalidateQueries({ queryKey: key });
+    qc.invalidateQueries({ queryKey: orgKey(ctx.id) });
+  };
+
+  const saveDetails = useMutation({
+    mutationFn: (body: object) => api.patch(`/organizations/${ctx.id}/doctors/${doctorId}`, body),
+    onSuccess: () => {
+      toast({ tone: 'success', title: 'Doctor updated' });
+      setF(null);
+      refresh();
+    },
+  });
+  const saveSchedule = useMutation({
+    mutationFn: () => api.put(`/organizations/${ctx.id}/doctors/${doctorId}/schedule`, slots ?? q.data?.schedules ?? []),
+    onSuccess: () => {
+      toast({ tone: 'success', title: 'Schedule saved' });
+      setSlots(null);
+      refresh();
+    },
+    onError: (err) => toast({ tone: 'error', title: 'Could not save schedule', body: errorMessage(err) }),
+  });
+  const remove = useMutation({
+    mutationFn: () => api.del(`/organizations/${ctx.id}/doctors/${doctorId}`),
+    onSuccess: () => {
+      toast({ tone: 'success', title: 'Doctor removed' });
+      qc.invalidateQueries({ queryKey: orgKey(ctx.id) });
+      navigate('/org/doctors');
+    },
+    onError: (err) => toast({ tone: 'error', title: 'Could not remove doctor', body: errorMessage(err) }),
+  });
+
+  if (!ctx.id) return <Navigate to="/org/setup" replace />;
+  if (q.isLoading) return <Spinner />;
+  if (q.error || !q.data) return <ErrorState error={q.error} retry={q.refetch} />;
+  const d = q.data;
+  const form = f ?? {
+    fullName: d.user.fullName,
+    phone: d.user.phone ?? '',
+    specialization: d.specialization,
+    qualification: d.qualification ?? '',
+    experienceYears: String(d.experienceYears),
+    consultationMinutes: String(d.consultationMinutes),
+    bio: d.bio ?? '',
+  };
+  const set = (k: string) => (e: { target: { value: string } }) => setF({ ...form, [k]: e.target.value });
+  const submit = (e: FormEvent) => {
+    e.preventDefault();
+    saveDetails.mutate({ ...form, phone: form.phone || undefined, experienceYears: Number(form.experienceYears), consultationMinutes: Number(form.consultationMinutes) });
+  };
+
+  return (
+    <div>
+      <PageHeader
+        title={d.user.fullName}
+        subtitle={`${d.specialization} · ${d.user.email}`}
+        actions={
+          <>
+            <LinkButton variant="ghost" to="/org/doctors">
+              All doctors
+            </LinkButton>
+            <LinkButton variant="secondary" to={`/doctors/${d.id}`}>
+              View public profile
+            </LinkButton>
+          </>
+        }
+      />
+      <div className="grid gap-5 lg:grid-cols-2">
+        <Card>
+          <CardTitle>Details</CardTitle>
+          <form onSubmit={submit} className="flex flex-col gap-4">
+            {saveDetails.error && <Alert>{errorMessage(saveDetails.error)}</Alert>}
+            <Input label="Full name" required minLength={2} value={form.fullName} onChange={set('fullName')} />
+            <Input label="Mobile number" type="tel" inputMode="tel" required value={form.phone} onChange={set('phone')} hint="10-digit mobile. Not shown to patients." />
+            <Input label="Specialization" required minLength={2} value={form.specialization} onChange={set('specialization')} />
+            <Input label="Qualification" value={form.qualification} onChange={set('qualification')} />
+            <div className="grid gap-4 sm:grid-cols-2">
+              <Input label="Years of experience" type="number" min={0} max={70} value={form.experienceYears} onChange={set('experienceYears')} />
+              <Input label="Typical consultation (min)" type="number" min={1} max={120} value={form.consultationMinutes} onChange={set('consultationMinutes')} />
+            </div>
+            <Textarea label="About the doctor" maxLength={2000} value={form.bio} onChange={set('bio')} />
+            <Button type="submit" loading={saveDetails.isPending}>
+              Save details
+            </Button>
+          </form>
+        </Card>
+        <div className="flex flex-col gap-5">
+          <Card>
+            <CardTitle>Availability</CardTitle>
+            <Toggle
+              checked={d.isAvailable}
+              disabled={saveDetails.isPending}
+              onChange={(v) => saveDetails.mutate({ isAvailable: v })}
+              label={d.isAvailable ? 'Available for patients' : 'Unavailable (on leave)'}
+            />
+            <p className="mt-2 text-sm text-ink-2">Turn this off when the doctor is on leave. Patients see that the doctor is unavailable.</p>
+          </Card>
+          <Card>
+            <CardTitle
+              action={
+                <LinkButton size="sm" variant="ghost" to="/org/queues">
+                  Manage queues
+                </LinkButton>
+              }
+            >
+              Queues
+            </CardTitle>
+            {d.queues.length ? (
+              <ul className="flex flex-col gap-2">
+                {d.queues.map((x) => (
+                  <li key={x.id}>
+                    <Link to={`/org/queues/${x.id}`} className="font-semibold text-brand hover:underline">
+                      {x.name}
+                    </Link>{' '}
+                    <span className="text-sm text-muted">({x.status.toLowerCase()})</span>
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <p className="text-ink-2">No queue yet. Create one on the Queues page and choose this doctor.</p>
+            )}
+          </Card>
+          <Card>
+            <CardTitle>Remove from clinic</CardTitle>
+            <p className="text-ink-2">The doctor's queues are archived. Their QFreee account is not deleted. Close open queues first.</p>
+            <Button
+              variant="danger"
+              className="mt-3"
+              loading={remove.isPending}
+              icon={<Trash2 className="size-4" />}
+              onClick={() => confirm(`Remove ${d.user.fullName} from this clinic?`) && remove.mutate()}
+            >
+              Remove doctor
+            </Button>
+          </Card>
+        </div>
+      </div>
+
+      <div className="mt-8">
+        <PageHeader
+          title="Weekly schedule"
+          subtitle="Consulting sessions and how many patients the doctor sees in each. Patients see these timings."
+          actions={
+            <Button loading={saveSchedule.isPending} onClick={() => saveSchedule.mutate()}>
+              Save schedule
+            </Button>
+          }
+        />
+        <ScheduleEditor value={slots ?? d.schedules} onChange={setSlots} />
+      </div>
+    </div>
   );
 }
 
@@ -664,8 +901,9 @@ export function OrgProfile() {
                 Add another branch
               </LinkButton>
             </div>
-            <div className="mt-6 max-w-2xl">
+            <div className="mt-6 flex max-w-2xl flex-col gap-5">
               <ChangePasswordCard />
+              <DeleteAccountCard extra="Any clinic or lab that only you own will be closed and removed from QFreee, with upcoming bookings cancelled. Close open queues first." />
             </div>
           </div>
         );

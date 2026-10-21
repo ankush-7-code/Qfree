@@ -5,6 +5,7 @@ import { parse } from '../../lib/validate.js';
 import { authenticate, currentUser } from '../../middleware/auth.js';
 import { authLimiter } from '../../middleware/rateLimit.js';
 import * as auth from './auth.service.js';
+import { deleteAccount } from './account.service.js';
 
 export const REFRESH_COOKIE = 'qf_rt';
 
@@ -58,6 +59,13 @@ authRouter.post('/forgot-password', authLimiter, async (req, res) => {
 authRouter.post('/reset-password', authLimiter, async (req, res) => {
   const body = parse(auth.resetPasswordSchema, req.body);
   await auth.resetPassword(body.token, body.newPassword);
+  res.clearCookie(REFRESH_COOKIE, { ...cookieOptions(), maxAge: undefined });
+  res.status(204).end();
+});
+
+authRouter.post('/delete-account', authenticate, authLimiter, async (req, res) => {
+  const { password } = parse(z.object({ password: z.string().min(1, 'Enter your password') }), req.body);
+  await deleteAccount(currentUser(req).id, password);
   res.clearCookie(REFRESH_COOKIE, { ...cookieOptions(), maxAge: undefined });
   res.status(204).end();
 });

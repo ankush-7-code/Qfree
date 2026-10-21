@@ -1,7 +1,8 @@
-import { NavLink, Outlet } from 'react-router';
+import { Link, NavLink, Outlet } from 'react-router';
 import clsx from 'clsx';
 import { homeFor, useAuth } from '../lib/auth';
 import { LinkButton } from '../components/ui/Button';
+import { SUPPORT_EMAIL, SUPPORT_MAILTO } from '../lib/support';
 import { Logo } from './Logo';
 
 const links = [
@@ -52,6 +53,15 @@ export function PublicLayout() {
         <div className="mx-auto flex max-w-6xl flex-wrap items-center justify-between gap-4 px-4 py-8 text-sm text-muted">
           <Logo />
           <p>QFreee — Know your queue. Save your time.</p>
+          <p>
+            <Link to="/help" className="font-semibold text-brand hover:underline">
+              Help &amp; support
+            </Link>{' '}
+            ·{' '}
+            <a href={SUPPORT_MAILTO} className="hover:underline">
+              {SUPPORT_EMAIL}
+            </a>
+          </p>
           <p>© {new Date().getFullYear()} QFreee. Patient data is kept to the minimum needed.</p>
         </div>
       </footer>

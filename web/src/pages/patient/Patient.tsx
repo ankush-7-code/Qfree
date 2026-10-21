@@ -12,7 +12,7 @@ import { Alert, Card, CardTitle, EmptyState, ErrorState, Input, PageHeader, Pagi
 import { useToast } from '../../components/ui/Toast';
 import { LiveQueueCard } from '../../components/queue/LiveQueueCard';
 import { EntryStatusBadge } from '../../components/queue/Status';
-import { ChangePasswordCard } from '../shared/Shared';
+import { ChangePasswordCard, DeleteAccountCard } from '../shared/Shared';
 
 interface ActiveItem extends EntryView {
   queue: { id: string; name: string };
@@ -303,6 +303,7 @@ export function PatientProfile() {
           </form>
         </Card>
         <ChangePasswordCard />
+        <DeleteAccountCard extra="Any upcoming bookings or places in line will be cancelled." />
       </div>
     </div>
   );

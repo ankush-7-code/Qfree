@@ -4,7 +4,7 @@ import { NavLink, Outlet, useLocation, useNavigate } from 'react-router';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   BarChart3, Bell, Building2, CalendarClock, ClipboardList, Clock, FlaskConical, History, LayoutDashboard, ListOrdered,
-  LogOut, Menu, Search, Settings, ShieldCheck, Stethoscope, TestTubes, User, Users, X,
+  LifeBuoy, LogOut, Menu, Search, Settings, ShieldCheck, Stethoscope, TestTubes, User, Users, X,
 } from 'lucide-react';
 import { api } from '../lib/api';
 import { useAuth } from '../lib/auth';
@@ -23,6 +23,8 @@ interface NavItem {
 
 const i = (C: typeof Bell) => <C className="size-5" aria-hidden />;
 
+const HELP: NavItem = { to: '/help', label: 'Help & support', icon: i(LifeBuoy) };
+
 const NAV: Record<Role, NavItem[]> = {
   PATIENT: [
     { to: '/patient', label: 'Dashboard', icon: i(LayoutDashboard), end: true },
@@ -31,6 +33,7 @@ const NAV: Record<Role, NavItem[]> = {
     { to: '/patient/history', label: 'Visit history', icon: i(History) },
     { to: '/notifications', label: 'Notifications', icon: i(Bell) },
     { to: '/patient/profile', label: 'Profile', icon: i(User) },
+    HELP,
   ],
   DOCTOR: [
     { to: '/doctor', label: 'Dashboard', icon: i(LayoutDashboard), end: true },
@@ -40,6 +43,7 @@ const NAV: Record<Role, NavItem[]> = {
     { to: '/doctor/analytics', label: 'Analytics', icon: i(BarChart3) },
     { to: '/notifications', label: 'Notifications', icon: i(Bell) },
     { to: '/doctor/profile', label: 'Profile', icon: i(User) },
+    HELP,
   ],
   ORG_ADMIN: [
     { to: '/org', label: 'Dashboard', icon: i(LayoutDashboard), end: true },
@@ -51,6 +55,7 @@ const NAV: Record<Role, NavItem[]> = {
     { to: '/org/reports', label: 'Reports', icon: i(ClipboardList) },
     { to: '/org/analytics', label: 'Analytics', icon: i(BarChart3) },
     { to: '/org/profile', label: 'Organization', icon: i(Building2) },
+    HELP,
   ],
   ADMIN: [
     { to: '/admin', label: 'Dashboard', icon: i(LayoutDashboard), end: true },
@@ -63,6 +68,7 @@ const NAV: Record<Role, NavItem[]> = {
     { to: '/admin/reports', label: 'Reports & issues', icon: i(ShieldCheck) },
     { to: '/admin/analytics', label: 'Analytics', icon: i(BarChart3) },
     { to: '/admin/settings', label: 'System settings', icon: i(Settings) },
+    HELP,
   ],
 };
 

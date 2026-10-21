@@ -149,23 +149,57 @@ me.get('/', async (req, res) => {
   res.json({ ...d, queues: await Promise.all(queues.map((q) => getSnapshot(q.id))) });
 });
 
+/** Profile fields a doctor (or their clinic) can edit. */
+export const doctorProfileBody = z.object({
+  fullName: z.string().trim().min(2).max(100).optional(),
+  phone: mobileSchema.optional(), // required for doctors: it can be changed, not removed
+  specialization: z.string().trim().min(2).max(100).optional(),
+  qualification: z.string().trim().max(200).optional(),
+  experienceYears: z.coerce.number().int().min(0).max(70).optional(),
+  bio: z.string().trim().max(2000).optional(),
+  consultationMinutes: z.coerce.number().int().min(1).max(120).optional(),
+});
+
+/** Weekly consulting sessions, each with an optional patient limit. */
+export const scheduleBody = z
+  .array(
+    z
+      .object({
+        dayOfWeek: z.number().int().min(0).max(6),
+        startTime: hhmm,
+        endTime: hhmm,
+        // Patient limit for this consulting session; null/omitted = no limit.
+        maxPatients: z.coerce.number().int().min(1).max(1000).nullable().optional(),
+      })
+      .refine((s) => s.startTime < s.endTime, 'startTime must be before endTime'),
+  )
+  .max(21)
+  .refine(
+    (all) => all.every((a, i) => all.every((b, j) => i === j || a.dayOfWeek !== b.dayOfWeek || a.endTime <= b.startTime || b.endTime <= a.startTime)),
+    'Sessions on the same day must not overlap',
+  );
+
+export async function updateDoctorProfile(doctorId: string, body: z.infer<typeof doctorProfileBody>) {
+  const { fullName, phone, ...doctor } = body;
+  const d = await prisma.doctor.update({ where: { id: doctorId }, data: doctor, select: { userId: true } });
+  await prisma.user.update({ where: { id: d.userId }, data: { fullName, phone } });
+}
+
+export async function replaceSchedule(doctorId: string, rows: z.infer<typeof scheduleBody>) {
+  await prisma.$transaction([
+    prisma.doctorSchedule.deleteMany({ where: { doctorId } }),
+    prisma.doctorSchedule.createMany({ data: rows.map((r) => ({ ...r, maxPatients: r.maxPatients ?? null, doctorId })) }),
+  ]);
+  // Session limits affect whether the doctor's queues accept patients right now.
+  const queues = await prisma.queue.findMany({ where: { doctorId, isArchived: false }, select: { id: true } });
+  await Promise.all(queues.map((q) => publishQueue(q.id)));
+  return prisma.doctorSchedule.findMany({ where: { doctorId }, orderBy: [{ dayOfWeek: 'asc' }, { startTime: 'asc' }] });
+}
+
 me.patch('/', async (req, res) => {
   const user = currentUser(req);
-  const body = parse(
-    z.object({
-      fullName: z.string().trim().min(2).max(100).optional(),
-      phone: mobileSchema.optional(), // required for doctors: it can be changed, not removed
-      specialization: z.string().trim().min(2).max(100).optional(),
-      qualification: z.string().trim().max(200).optional(),
-      experienceYears: z.coerce.number().int().min(0).max(70).optional(),
-      bio: z.string().trim().max(2000).optional(),
-      consultationMinutes: z.coerce.number().int().min(1).max(120).optional(),
-    }),
-    req.body,
-  );
-  const { fullName, phone, ...doctor } = body;
-  await prisma.user.update({ where: { id: user.id }, data: { fullName, phone } });
-  await prisma.doctor.update({ where: { userId: user.id }, data: doctor });
+  const body = parse(doctorProfileBody, req.body);
+  await updateDoctorProfile((await myDoctor(user.id)).id, body);
   await auditFrom(req, { action: 'doctor.profile_update', entityType: 'doctor', entityId: user.id });
   res.json(await myDoctor(user.id));
 });
@@ -180,36 +214,11 @@ me.patch('/availability', async (req, res) => {
 
 me.put('/schedule', async (req, res) => {
   const user = currentUser(req);
-  const rows = parse(
-    z
-      .array(
-        z
-          .object({
-            dayOfWeek: z.number().int().min(0).max(6),
-            startTime: hhmm,
-            endTime: hhmm,
-            // Patient limit for this consulting session, set by the doctor; null/omitted = no limit.
-            maxPatients: z.coerce.number().int().min(1).max(1000).nullable().optional(),
-          })
-          .refine((s) => s.startTime < s.endTime, 'startTime must be before endTime'),
-      )
-      .max(21)
-      .refine(
-        (all) =>
-          all.every((a, i) => all.every((b, j) => i === j || a.dayOfWeek !== b.dayOfWeek || a.endTime <= b.startTime || b.endTime <= a.startTime)),
-        'Sessions on the same day must not overlap',
-      ),
-    req.body,
-  );
+  const rows = parse(scheduleBody, req.body);
   const d = await myDoctor(user.id);
-  await prisma.$transaction([
-    prisma.doctorSchedule.deleteMany({ where: { doctorId: d.id } }),
-    prisma.doctorSchedule.createMany({ data: rows.map((r) => ({ ...r, maxPatients: r.maxPatients ?? null, doctorId: d.id })) }),
-  ]);
+  const saved = await replaceSchedule(d.id, rows);
   await auditFrom(req, { action: 'doctor.schedule_update', entityType: 'doctor', entityId: d.id });
-  // Session limits affect whether the doctor's queues accept patients right now.
-  await Promise.all(d.queues.map((q) => publishQueue(q.id)));
-  res.json(await prisma.doctorSchedule.findMany({ where: { doctorId: d.id }, orderBy: [{ dayOfWeek: 'asc' }, { startTime: 'asc' }] }));
+  res.json(saved);
 });
 
 doctorRouter.use('/me', me);

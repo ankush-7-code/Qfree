@@ -11,6 +11,7 @@ import { Button } from '../../components/ui/Button';
 import { Alert, Badge, Card, CardTitle, EmptyState, ErrorState, Input, PageHeader, Pagination, Spinner, Textarea } from '../../components/ui/primitives';
 import { useToast } from '../../components/ui/Toast';
 import { EntryStatusBadge } from '../../components/queue/Status';
+import { SUPPORT_EMAIL, SUPPORT_MAILTO } from '../../lib/support';
 
 export function Notifications() {
   const [page, setPage] = useState(1);
@@ -129,7 +130,18 @@ export function ReportIssue() {
   });
   return (
     <div>
-      <PageHeader title="Report a problem" subtitle="Tell us what went wrong. An administrator will look into it." />
+      <PageHeader
+        title="Report a problem"
+        subtitle={
+          <>
+            Tell us what went wrong. An administrator will look into it. You can also email{' '}
+            <a href={SUPPORT_MAILTO} className="font-semibold text-brand hover:underline">
+              {SUPPORT_EMAIL}
+            </a>
+            .
+          </>
+        }
+      />
       <div className="grid gap-5 lg:grid-cols-2">
         <Card>
           <form onSubmit={(e: FormEvent) => (e.preventDefault(), m.mutate())} className="flex flex-col gap-4">
@@ -161,6 +173,52 @@ export function ReportIssue() {
         </Card>
       </div>
     </div>
+  );
+}
+
+/** Permanently delete the signed-in account after confirming the password. */
+export function DeleteAccountCard({ extra }: { extra?: string }) {
+  const { logout } = useAuth();
+  const navigate = useNavigate();
+  const toast = useToast();
+  const [open, setOpen] = useState(false);
+  const [password, setPassword] = useState('');
+  const [typed, setTyped] = useState('');
+  const m = useMutation({
+    mutationFn: () => api.post('/auth/delete-account', { password }),
+    onSuccess: async () => {
+      await logout().catch(() => undefined);
+      toast({ tone: 'success', title: 'Your account has been deleted', body: 'Thank you for using QFreee.' });
+      navigate('/', { replace: true });
+    },
+  });
+  return (
+    <Card className="border-st-closed/40">
+      <CardTitle>Delete my account</CardTitle>
+      <p className="text-ink-2">
+        This permanently erases your name, email, mobile number and password, and you won't be able to sign in again. {extra} Past visits remain only as anonymous
+        records ("Deleted user"). This cannot be undone.
+      </p>
+      {!open ? (
+        <Button variant="danger" className="mt-4" onClick={() => setOpen(true)}>
+          Delete my account
+        </Button>
+      ) : (
+        <form onSubmit={(e: FormEvent) => (e.preventDefault(), m.mutate())} className="mt-4 flex flex-col gap-4">
+          {m.error && <Alert>{errorMessage(m.error)}</Alert>}
+          <Input label="Your password" type="password" autoComplete="current-password" required value={password} onChange={(e) => setPassword(e.target.value)} />
+          <Input label='Type DELETE to confirm' required autoComplete="off" value={typed} onChange={(e) => setTyped(e.target.value)} />
+          <div className="flex flex-wrap gap-3">
+            <Button type="submit" variant="danger" loading={m.isPending} disabled={typed.trim().toUpperCase() !== 'DELETE'}>
+              Permanently delete my account
+            </Button>
+            <Button type="button" variant="ghost" onClick={() => (setOpen(false), setPassword(''), setTyped(''), m.reset())}>
+              Cancel
+            </Button>
+          </div>
+        </form>
+      )}
+    </Card>
   );
 }
 

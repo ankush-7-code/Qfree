@@ -10,6 +10,8 @@ import { authenticate, currentUser, requireRole } from '../../middleware/auth.js
 import { assertOrgStaff } from '../access.js';
 import { hashPassword, passwordSchema } from '../auth/auth.service.js';
 import { JK_DISTRICTS, jkDistrict } from '../../lib/districts.js';
+import { doctorProfileBody, replaceSchedule, scheduleBody, updateDoctorProfile } from '../doctors/doctor.routes.js';
+import { publishQueue } from '../../realtime/publish.js';
 import { getSnapshot } from '../queues/queue.state.js';
 
 export const organizationRouter = Router();
@@ -323,6 +325,56 @@ organizationRouter.delete('/:id/doctors/:doctorId', authenticate, async (req, re
   ]);
   await auditFrom(req, { action: 'organization.doctor_unlink', entityType: 'organization', entityId: id, meta: { doctorId } });
   res.status(204).end();
+});
+
+/** The clinic's doctor, or 404 if the doctor is not part of this clinic. */
+async function clinicDoctor(organizationId: string, doctorId: string) {
+  const doctor = await prisma.doctor.findUnique({ where: { id: doctorId }, select: { id: true, organizationId: true } });
+  if (!doctor || doctor.organizationId !== organizationId) throw notFound('Doctor');
+  return doctor;
+}
+
+const doctorParams = z.object({ id: uuid, doctorId: uuid });
+
+/** Everything a clinic needs to manage one of its doctors. */
+organizationRouter.get('/:id/doctors/:doctorId', authenticate, async (req, res) => {
+  const { id, doctorId } = parse(doctorParams, req.params);
+  await assertOrgStaff(currentUser(req), id, ['OWNER', 'MANAGER']);
+  await clinicDoctor(id, doctorId);
+  res.json(
+    await prisma.doctor.findUnique({
+      where: { id: doctorId },
+      include: {
+        user: { select: { fullName: true, email: true, phone: true } },
+        schedules: { orderBy: [{ dayOfWeek: 'asc' }, { startTime: 'asc' }], select: { dayOfWeek: true, startTime: true, endTime: true, maxPatients: true } },
+        queues: { where: { isArchived: false }, select: { id: true, name: true, status: true } },
+      },
+    }),
+  );
+});
+
+organizationRouter.patch('/:id/doctors/:doctorId', authenticate, async (req, res) => {
+  const { id, doctorId } = parse(doctorParams, req.params);
+  await assertOrgStaff(currentUser(req), id, ['OWNER', 'MANAGER']);
+  await clinicDoctor(id, doctorId);
+  const { isAvailable, ...profile } = parse(doctorProfileBody.extend({ isAvailable: z.boolean().optional() }), req.body);
+  await updateDoctorProfile(doctorId, profile);
+  if (isAvailable !== undefined) {
+    await prisma.doctor.update({ where: { id: doctorId }, data: { isAvailable } });
+    const queues = await prisma.queue.findMany({ where: { doctorId, isArchived: false }, select: { id: true } });
+    await Promise.all(queues.map((q) => publishQueue(q.id)));
+  }
+  await auditFrom(req, { action: 'organization.doctor_update', entityType: 'doctor', entityId: doctorId, meta: { organizationId: id } });
+  res.status(204).end();
+});
+
+organizationRouter.put('/:id/doctors/:doctorId/schedule', authenticate, async (req, res) => {
+  const { id, doctorId } = parse(doctorParams, req.params);
+  await assertOrgStaff(currentUser(req), id, ['OWNER', 'MANAGER']);
+  await clinicDoctor(id, doctorId);
+  const saved = await replaceSchedule(doctorId, parse(scheduleBody, req.body));
+  await auditFrom(req, { action: 'doctor.schedule_update', entityType: 'doctor', entityId: doctorId, meta: { organizationId: id } });
+  res.json(saved);
 });
 
 // ─── Services ───

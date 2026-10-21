@@ -16,6 +16,7 @@ const pub = () => import('./pages/public/Info');
 const About = lazyNamed(pub, 'About');
 const HowItWorks = lazyNamed(pub, 'HowItWorks');
 const NotFound = lazyNamed(pub, 'NotFound');
+const Help = lazyNamed(pub, 'Help');
 const Search = lazyNamed(() => import('./pages/public/Search'), 'Search');
 const prov = () => import('./pages/public/Provider');
 const ProviderDetails = lazyNamed(prov, 'ProviderDetails');
@@ -46,6 +47,7 @@ const OrgDashboard = lazyNamed(org, 'OrgDashboard');
 const OrgQueues = lazyNamed(org, 'OrgQueues');
 const OrgQueueBoard = lazyNamed(org, 'OrgQueueBoard');
 const OrgDoctors = lazyNamed(org, 'OrgDoctors');
+const OrgDoctorManage = lazyNamed(org, 'OrgDoctorManage');
 const OrgServices = lazyNamed(org, 'OrgServices');
 const OrgStaff = lazyNamed(org, 'OrgStaff');
 const OrgHours = lazyNamed(org, 'OrgHours');
@@ -104,6 +106,7 @@ export function App() {
           <Route path="providers/:id" element={<ProviderDetails />} />
           <Route path="doctors/:id" element={<DoctorDetails />} />
           <Route path="queues/:id" element={<QueuePage />} />
+          <Route path="help" element={<Help />} />
         </Route>
 
         <Route element={<RequireRole roles={ALL} />}>
@@ -144,6 +147,7 @@ export function App() {
             <Route path="queues/:queueId" element={<OrgQueueBoard />} />
             <Route path="queues/:queueId/entries/:entryId" element={<EntryDetails />} />
             <Route path="doctors" element={<OrgDoctors />} />
+            <Route path="doctors/:doctorId" element={<OrgDoctorManage />} />
             <Route path="services" element={<OrgServices />} />
             <Route path="staff" element={<OrgStaff />} />
             <Route path="hours" element={<OrgHours />} />
