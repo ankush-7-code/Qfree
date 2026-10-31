@@ -5,8 +5,8 @@ services:
   - type: web
     name: qfree-api
     runtime: node
-    # Paid instance: never sleeps (free instances sleep and were suspended on 2026-10-28).
-    plan: starter
+    # Paid plan ($7/month, 0.5 CPU, 512 MB RAM): never sleeps. Free instances sleep and were suspended on 2026-10-28.
+    plan: 0.5c-512mb
     region: singapore
     # Dev dependencies are needed to compile TypeScript and to run `prisma migrate deploy` at start.
     buildCommand: npm ci --include=dev && npm run build -w server
@@ -46,7 +46,9 @@ services:
 
 databases:
   - name: qfree-db
-    plan: free
+    # Paid plan ($6/month, 0.1 CPU, 256 MB RAM, 1 GB disk); free databases expire after 30 days.
+    plan: 0.1c-256mb
+    diskSizeGB: 1
     region: singapore
     databaseName: qfree
     postgresMajorVersion: "17"
