@@ -5,7 +5,8 @@ services:
   - type: web
     name: qfree-api
     runtime: node
-    plan: free
+    # Paid instance: never sleeps (free instances sleep and were suspended on 2026-10-28).
+    plan: starter
     region: singapore
     # Dev dependencies are needed to compile TypeScript and to run `prisma migrate deploy` at start.
     buildCommand: npm ci --include=dev && npm run build -w server
@@ -30,11 +31,10 @@ services:
         value: "2"
       - key: LOG_LEVEL
         value: info
-      # Free instances sleep after ~15 idle minutes and take a while to wake. The API pings its own
-      # public URL every 10 minutes to stay awake. This uses ~744 of the 750 free instance hours a
-      # month, so a second free service in the same workspace would run out of hours.
+      # Only needed on a free instance (which sleeps after ~15 idle minutes): the API then pings its
+      # own public URL every 10 minutes to stay awake. A paid instance never sleeps.
       - key: KEEP_ALIVE
-        value: "true"
+        value: "false"
       # Load demo data on start, only while the database is empty (never overwrites real data).
       # Set to "false" for a clean production launch.
       - key: SEED_DEMO
